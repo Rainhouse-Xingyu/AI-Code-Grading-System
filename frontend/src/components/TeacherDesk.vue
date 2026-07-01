@@ -268,6 +268,7 @@
               <el-button size="small" :loading="packageDownloading" @click="downloadAllReports">全部报告</el-button>
               <el-button size="small" :loading="packageDownloading" @click="downloadAllCodes">全部代码</el-button>
               <el-button size="small" type="primary" :loading="packageDownloading" @click="downloadAllPackage">合并下载</el-button>
+              <el-button size="small" type="success" :loading="packageDownloading" @click="downloadScoreSheet">成绩表 Excel</el-button>
               <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedReports">
                 选中报告
               </el-button>
@@ -1811,6 +1812,33 @@ async function downloadAllCodes() {
     return;
   }
   await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-codes`, "代码包");
+}
+
+async function downloadScoreSheet() {
+  if (!selectedAssignment.value) {
+    ElMessage.warning("请先选择作业");
+    return;
+  }
+  const assignment = assignments.value.find((item) => item.id === selectedAssignment.value);
+  packageDownloading.value = true;
+  packageDownloadProgress.value = 1;
+  try {
+    await props.api.downloadGet(
+      `/api/v1/assignments/${selectedAssignment.value}/score-sheet`,
+      `${safeFilename(assignment?.title || "作业")}_成绩表.xlsx`,
+      {
+        onProgress: (percent) => {
+          packageDownloadProgress.value = percent;
+        }
+      }
+    );
+    ElMessage.success("成绩表下载已开始");
+  } catch (error) {
+    ElMessage.error(messageOf(error));
+  } finally {
+    packageDownloading.value = false;
+    resetProgressLater(packageDownloadProgress);
+  }
 }
 
 async function downloadSelectedPackage() {

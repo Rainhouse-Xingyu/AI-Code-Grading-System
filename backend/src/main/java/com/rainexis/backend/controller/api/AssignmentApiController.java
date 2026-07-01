@@ -26,6 +26,7 @@ import com.rainexis.backend.service.business.AccessControlService;
 import com.rainexis.backend.service.business.AssignmentClassService;
 import com.rainexis.backend.service.business.AssignmentDownloadService;
 import com.rainexis.backend.service.business.RubricDimensionItemService;
+import com.rainexis.backend.service.business.ScoreSheetExportService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -74,6 +75,7 @@ public class AssignmentApiController {
     private final AssignmentClassService assignmentClassService;
     private final AssignmentDownloadService assignmentDownloadService;
     private final RubricDimensionItemService dimensionItemService;
+    private final ScoreSheetExportService scoreSheetExportService;
     private final ObjectMapper objectMapper;
 
     public AssignmentApiController(TAssignmentMapper assignmentMapper,
@@ -92,6 +94,7 @@ public class AssignmentApiController {
                                    AssignmentClassService assignmentClassService,
                                    AssignmentDownloadService assignmentDownloadService,
                                    RubricDimensionItemService dimensionItemService,
+                                   ScoreSheetExportService scoreSheetExportService,
                                    ObjectMapper objectMapper) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
@@ -109,6 +112,7 @@ public class AssignmentApiController {
         this.assignmentClassService = assignmentClassService;
         this.assignmentDownloadService = assignmentDownloadService;
         this.dimensionItemService = dimensionItemService;
+        this.scoreSheetExportService = scoreSheetExportService;
         this.objectMapper = objectMapper;
     }
 
@@ -334,6 +338,20 @@ public class AssignmentApiController {
         List<Long> ids = parseVisibleStudentIds(assignment, studentIds);
         StreamingResponseBody body = output -> assignmentDownloadService.writeCodesZip(id, ids, output);
         return streamZip(assignmentDownloadService.codesFilename(id), body);
+    }
+
+    @GetMapping("/{id}/score-sheet")
+    public ResponseEntity<byte[]> scoreSheet(@PathVariable Long id) {
+        AuthContext.requireTeacher();
+        TAssignment assignment = accessControlService.requireAssignmentAccess(id);
+        ScoreSheetExportService.ExcelFile excel = scoreSheetExportService.exportAssignment(assignment);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(excel.filename(), StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(excel.bytes());
     }
 
     private ResponseEntity<StreamingResponseBody> downloadZip(Long assignmentId, List<Long> studentIds) {
