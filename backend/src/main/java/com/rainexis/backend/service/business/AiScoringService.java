@@ -620,26 +620,59 @@ public class AiScoringService {
     private BigDecimal normalizeDimensionScores(Map<String, Object> result, List<?> dimensions, Map<String, BigDecimal> rubricMaxScores) {
         BigDecimal total = BigDecimal.ZERO;
         List<Map<String, Object>> normalizedDimensions = new ArrayList<>();
+        List<Map<String, Object>> rawDimensions = new ArrayList<>();
         for (Object dimensionValue : dimensions) {
             if (!(dimensionValue instanceof Map<?, ?> rawDimension)) {
                 continue;
             }
-            Map<String, Object> dimension = new LinkedHashMap<>();
-            rawDimension.forEach((key, value) -> dimension.put(String.valueOf(key), value));
-            String name = String.valueOf(dimension.getOrDefault("name", ""));
-            BigDecimal rubricMax = rubricMaxScores.get(name);
-            if (rubricMax == null) {
-                normalizedDimensions.add(dimension);
-                continue;
+            Map<String, Object> item = new LinkedHashMap<>();
+            rawDimension.forEach((key, value) -> item.put(String.valueOf(key), value));
+            rawDimensions.add(item);
+        }
+
+        if (rubricMaxScores.isEmpty()) {
+            for (Map<String, Object> dimension : rawDimensions) {
+                Map<String, Object> normalized = normalizeFreeDimension(dimension);
+                normalizedDimensions.add(normalized);
+                total = total.add(decimal(normalized.getOrDefault("score", BigDecimal.ZERO)));
             }
-            BigDecimal score = decimal(dimension.getOrDefault("score", BigDecimal.ZERO));
-            Object returnedMaxValue = dimension.get("max_score");
-            if (returnedMaxValue != null) {
-                BigDecimal returnedMax = decimal(returnedMaxValue);
-                if (returnedMax.compareTo(BigDecimal.ZERO) > 0
-                        && returnedMax.compareTo(rubricMax) != 0
-                        && score.compareTo(returnedMax) <= 0) {
-                    score = score.multiply(rubricMax).divide(returnedMax, 4, RoundingMode.HALF_UP);
+            result.put("dimension_scores", normalizedDimensions);
+            return total;
+        }
+
+        Set<Integer> usedIndexes = new HashSet<>();
+        boolean repaired = rawDimensions.isEmpty();
+        int index = 0;
+        for (Map.Entry<String, BigDecimal> rubricEntry : rubricMaxScores.entrySet()) {
+            String rubricName = rubricEntry.getKey();
+            BigDecimal rubricMax = rubricEntry.getValue();
+            int matchIndex = findMatchingDimension(rawDimensions, usedIndexes, rubricName, index);
+            Map<String, Object> dimension = new LinkedHashMap<>();
+            BigDecimal score;
+            if (matchIndex < 0) {
+                score = BigDecimal.ZERO;
+                dimension.put("comment", "模型未返回该评分维度，服务端已按评分标准补齐，建议教师复核。");
+                repaired = true;
+            } else {
+                usedIndexes.add(matchIndex);
+                dimension.putAll(rawDimensions.get(matchIndex));
+                String originalName = String.valueOf(dimension.getOrDefault("name", ""));
+                if (!rubricName.equals(originalName)) {
+                    repaired = true;
+                    String comment = String.valueOf(dimension.getOrDefault("comment",
+                            dimension.getOrDefault("reason", dimension.getOrDefault("description", "AI 初评。"))));
+                    dimension.put("comment", comment + "（服务端已按 Rubric 维度名规范化，模型原返回维度: "
+                            + (originalName.isBlank() ? "空" : originalName) + "。）");
+                }
+                score = decimal(dimension.getOrDefault("score", BigDecimal.ZERO));
+                Object returnedMaxValue = dimension.get("max_score");
+                if (returnedMaxValue != null) {
+                    BigDecimal returnedMax = decimal(returnedMaxValue);
+                    if (returnedMax.compareTo(BigDecimal.ZERO) > 0
+                            && returnedMax.compareTo(rubricMax) != 0
+                            && score.compareTo(returnedMax) <= 0) {
+                        score = score.multiply(rubricMax).divide(returnedMax, 4, RoundingMode.HALF_UP);
+                    }
                 }
             }
             if (score.compareTo(BigDecimal.ZERO) < 0) {
@@ -649,13 +682,89 @@ public class AiScoringService {
                 score = rubricMax;
             }
             score = score.setScale(2, RoundingMode.HALF_UP);
+            dimension.put("name", rubricName);
             dimension.put("score", score);
             dimension.put("max_score", rubricMax);
+            dimension.putIfAbsent("comment", "AI 初评。");
             normalizedDimensions.add(dimension);
             total = total.add(score);
+            index++;
+        }
+        if (usedIndexes.size() < rawDimensions.size()) {
+            repaired = true;
+        }
+        if (repaired) {
+            addNormalizationIssue(result);
         }
         result.put("dimension_scores", normalizedDimensions);
         return total;
+    }
+
+    private Map<String, Object> normalizeFreeDimension(Map<String, Object> dimension) {
+        Map<String, Object> normalized = new LinkedHashMap<>(dimension);
+        BigDecimal maxScore = decimal(normalized.getOrDefault("max_score", BigDecimal.valueOf(100)));
+        if (maxScore.compareTo(BigDecimal.ZERO) <= 0) {
+            maxScore = BigDecimal.valueOf(100);
+        }
+        BigDecimal score = decimal(normalized.getOrDefault("score", BigDecimal.ZERO));
+        if (score.compareTo(BigDecimal.ZERO) < 0) {
+            score = BigDecimal.ZERO;
+        }
+        if (score.compareTo(maxScore) > 0) {
+            score = maxScore;
+        }
+        normalized.put("score", score.setScale(2, RoundingMode.HALF_UP));
+        normalized.put("max_score", maxScore.setScale(2, RoundingMode.HALF_UP));
+        normalized.putIfAbsent("comment", "AI 初评。");
+        return normalized;
+    }
+
+    private int findMatchingDimension(List<Map<String, Object>> dimensions, Set<Integer> usedIndexes, String rubricName, int preferredIndex) {
+        for (int i = 0; i < dimensions.size(); i++) {
+            if (!usedIndexes.contains(i) && rubricName.equals(String.valueOf(dimensions.get(i).getOrDefault("name", "")))) {
+                return i;
+            }
+        }
+        String rubricKey = normalizeDimensionKey(rubricName);
+        for (int i = 0; i < dimensions.size(); i++) {
+            if (!usedIndexes.contains(i)
+                    && rubricKey.equals(normalizeDimensionKey(String.valueOf(dimensions.get(i).getOrDefault("name", ""))))) {
+                return i;
+            }
+        }
+        if (preferredIndex < dimensions.size() && !usedIndexes.contains(preferredIndex)) {
+            return preferredIndex;
+        }
+        return -1;
+    }
+
+    private String normalizeDimensionKey(String value) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char ch = Character.toLowerCase(value.charAt(i));
+            if (Character.isLetterOrDigit(ch)) {
+                builder.append(ch);
+            }
+        }
+        return builder.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void addNormalizationIssue(Map<String, Object> result) {
+        Object issueValue = result.get("issues");
+        List<Object> issues;
+        if (issueValue instanceof List<?> existing) {
+            issues = new ArrayList<>((List<Object>) existing);
+        } else {
+            issues = new ArrayList<>();
+        }
+        issues.add(0, Map.of(
+                "severity", "warning",
+                "file", "project",
+                "line", 1,
+                "description", "AI 返回的评分维度与 Rubric 不完全一致，服务端已按评分标准维度补齐或改名，建议教师重点复核。"
+        ));
+        result.put("issues", issues);
     }
 
     private Object requiredValue(Map<?, ?> value, String key, String message) {
@@ -790,12 +899,13 @@ public class AiScoringService {
 
                 强制输出要求:
                 1. 顶层必须且只能使用这些字段: total_score, dimension_scores, issues, file_analysis, report_markdown, token_usage。
-                2. dimension_scores 必须是非空数组，并覆盖评分标准 JSON 中每一个 dimensions.name。
-                3. issues 必须是数组；没有明显问题时也至少返回一条 severity 为 suggestion 的建议。
-                4. file_analysis 必须是数组；每项包含 file、summary、risk。
-                5. report_markdown 必须是中文 Markdown 字符串。
-                6. 不要返回 error、message、score、analysis 等替代顶层字段。
-                7. 如果代码不完整或无法运行，也必须按上述结构给出可复核的评分，不要拒绝评分。
+                2. dimension_scores 必须是非空数组，数组长度必须等于评分标准 JSON 中 dimensions 的长度。
+                3. dimension_scores 必须逐项对应评分标准 JSON 的 dimensions 顺序；每项 name 必须逐字原样复制对应 dimensions.name，不允许改写、翻译、合并、删除或新增评分维度。
+                4. issues 必须是数组；没有明显问题时也至少返回一条 severity 为 suggestion 的建议。
+                5. file_analysis 必须是数组；每项包含 file、summary、risk。
+                6. report_markdown 必须是中文 Markdown 字符串。
+                7. 不要返回 error、message、score、analysis 等替代顶层字段。
+                8. 如果代码不完整或无法运行，也必须按上述结构给出可复核的评分，不要拒绝评分。
 
                 输出格式约束:
                 {

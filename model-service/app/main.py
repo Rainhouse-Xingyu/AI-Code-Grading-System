@@ -285,6 +285,7 @@ async def score_with_openai_compatible(
     response_json = response.json()
     content = model_content(response_json)
     result = parse_model_json(response_json)
+    result = normalize_result(result, request.rubric_json)
     result["model_name"] = response_json.get("model", model)
     usage = response_json.get("usage") or {}
     if isinstance(usage, dict) and usage.get("total_tokens") is not None:
@@ -311,6 +312,144 @@ def parse_model_json(response_json: dict[str, Any]) -> dict[str, Any]:
 
 def model_content(response_json: dict[str, Any]) -> str:
     return response_json["choices"][0]["message"]["content"].strip()
+
+
+def normalize_result(result: dict[str, Any], rubric: dict[str, Any]) -> dict[str, Any]:
+    """Force model output back onto the teacher rubric before backend persistence."""
+    if not isinstance(result, dict):
+        result = {}
+    issues = result.get("issues")
+    if not isinstance(issues, list):
+        issues = []
+        result["issues"] = issues
+    if not issues:
+        issues.append(
+            {
+                "severity": "suggestion",
+                "file": "project",
+                "line": 1,
+                "description": "建议教师复核 AI 初评，并结合运行结果确认最终分数。",
+            }
+        )
+    if not isinstance(result.get("file_analysis"), list):
+        result["file_analysis"] = []
+    if not isinstance(result.get("report_markdown"), str) or not result["report_markdown"].strip():
+        result["report_markdown"] = "# 评分报告\n\n模型未返回完整报告，服务端已保留可解析评分结果，建议教师复核。"
+
+    rubric_dimensions = rubric.get("dimensions") or []
+    if not rubric_dimensions:
+        return result
+
+    normalized_dimensions, total, repaired = normalize_dimension_scores(
+        result.get("dimension_scores"),
+        rubric_dimensions,
+    )
+    result["dimension_scores"] = normalized_dimensions
+    result["total_score"] = float(min(total, Decimal("100")).quantize(Decimal("0.01")))
+    if repaired:
+        issues.insert(
+            0,
+            {
+                "severity": "warning",
+                "file": "project",
+                "line": 1,
+                "description": "AI 返回的评分维度与 Rubric 不完全一致，服务端已按评分标准维度补齐或改名，建议教师重点复核。",
+            },
+        )
+    return result
+
+
+def normalize_dimension_scores(
+    raw_dimensions: Any,
+    rubric_dimensions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Decimal, bool]:
+    raw_items = raw_dimensions if isinstance(raw_dimensions, list) else []
+    raw_maps: list[dict[str, Any]] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            raw_maps.append(item)
+
+    used_indexes: set[int] = set()
+    normalized: list[dict[str, Any]] = []
+    total = Decimal("0")
+    repaired = not raw_maps
+
+    for index, rubric_dimension in enumerate(rubric_dimensions):
+        rubric_name = str(rubric_dimension.get("name") or f"评分维度{index + 1}")
+        rubric_max = safe_decimal(
+            rubric_dimension.get("max_score", rubric_dimension.get("weight", 100))
+        )
+        if rubric_max <= 0:
+            rubric_max = Decimal("100")
+
+        match_index = find_matching_dimension(raw_maps, used_indexes, rubric_name, index)
+        if match_index is None:
+            score = Decimal("0")
+            comment = "模型未返回该评分维度，服务端已按评分标准补齐，建议教师复核。"
+            repaired = True
+        else:
+            used_indexes.add(match_index)
+            raw = raw_maps[match_index]
+            raw_name = str(raw.get("name") or "")
+            score = safe_decimal(raw.get("score", 0))
+            returned_max = raw.get("max_score")
+            if returned_max is not None:
+                returned_max_decimal = safe_decimal(returned_max)
+                if returned_max_decimal > 0 and returned_max_decimal != rubric_max and score <= returned_max_decimal:
+                    score = (score * rubric_max / returned_max_decimal).quantize(Decimal("0.0001"))
+            comment = str(
+                raw.get("comment")
+                or raw.get("reason")
+                or raw.get("description")
+                or "AI 初评。"
+            )
+            if raw_name != rubric_name:
+                repaired = True
+                comment = f"{comment}（服务端已按 Rubric 维度名规范化，模型原返回维度: {raw_name or '空'}。）"
+
+        score = max(Decimal("0"), min(score, rubric_max)).quantize(Decimal("0.01"))
+        normalized.append(
+            {
+                "name": rubric_name,
+                "score": float(score),
+                "max_score": float(rubric_max.quantize(Decimal("0.01"))),
+                "comment": comment,
+            }
+        )
+        total += score
+
+    if len(used_indexes) < len(raw_maps):
+        repaired = True
+    return normalized, total, repaired
+
+
+def find_matching_dimension(
+    raw_maps: list[dict[str, Any]],
+    used_indexes: set[int],
+    rubric_name: str,
+    preferred_index: int,
+) -> int | None:
+    for index, item in enumerate(raw_maps):
+        if index not in used_indexes and str(item.get("name") or "") == rubric_name:
+            return index
+    rubric_key = normalize_dimension_key(rubric_name)
+    for index, item in enumerate(raw_maps):
+        if index not in used_indexes and normalize_dimension_key(str(item.get("name") or "")) == rubric_key:
+            return index
+    if preferred_index < len(raw_maps) and preferred_index not in used_indexes:
+        return preferred_index
+    return None
+
+
+def normalize_dimension_key(value: str) -> str:
+    return "".join(char for char in value.lower() if char.isalnum())
+
+
+def safe_decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return Decimal("0")
 
 # 工具函数，用于生成回退评分结果
 def fallback_score(request: ScoreRequest) -> dict[str, Any]:
@@ -425,12 +564,13 @@ def build_prompt(request: ScoreRequest) -> str:
 
 强制输出要求:
 1. 顶层必须且只能使用这些字段: total_score, dimension_scores, issues, file_analysis, report_markdown, token_usage。
-2. dimension_scores 必须是非空数组，并覆盖评分标准 JSON 中每一个 dimensions.name。
-3. issues 必须是数组；没有明显问题时也至少返回一条 severity 为 suggestion 的建议。
-4. file_analysis 必须是数组；每项包含 file、summary、risk。
-5. report_markdown 必须是中文 Markdown 字符串。
-6. 不要返回 error、message、score、analysis 等替代顶层字段。
-7. 如果代码不完整或无法运行，也必须按上述结构给出可复核的评分，不要拒绝评分。
+2. dimension_scores 必须是非空数组，数组长度必须等于评分标准 JSON 中 dimensions 的长度。
+3. dimension_scores 必须逐项对应评分标准 JSON 的 dimensions 顺序；每项 name 必须逐字原样复制对应 dimensions.name，不允许改写、翻译、合并、删除或新增评分维度。
+4. issues 必须是数组；没有明显问题时也至少返回一条 severity 为 suggestion 的建议。
+5. file_analysis 必须是数组；每项包含 file、summary、risk。
+6. report_markdown 必须是中文 Markdown 字符串。
+7. 不要返回 error、message、score、analysis 等替代顶层字段。
+8. 如果代码不完整或无法运行，也必须按上述结构给出可复核的评分，不要拒绝评分。
 
 输出 JSON 模板:
 {{
