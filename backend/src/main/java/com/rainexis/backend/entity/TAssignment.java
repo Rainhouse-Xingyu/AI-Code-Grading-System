@@ -15,9 +15,6 @@ import lombok.Setter;
 /**
  * 作业表实体类
  * 教师发布的编程作业，包含题目描述、时间期限、迟交策略等配置
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

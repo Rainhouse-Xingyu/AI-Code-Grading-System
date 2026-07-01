@@ -9,9 +9,6 @@ import org.springframework.stereotype.Service;
 /**
  * 用户服务实现类
  * 继承 MyBatis-Plus ServiceImpl，提供用户相关的数据访问能力
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Service
 public class TUserServiceImpl extends ServiceImpl<TUserMapper, TUser> implements ITUserService {

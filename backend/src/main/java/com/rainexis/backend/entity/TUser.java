@@ -14,9 +14,6 @@ import lombok.Setter;
 /**
  * 用户表实体类
  * 存储系统用户（教师和学生）的基本信息，包括登录凭证、角色、锁定状态等
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

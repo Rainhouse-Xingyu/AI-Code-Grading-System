@@ -15,9 +15,6 @@ import lombok.Setter;
  * <p>
  * 代码结构存储表 - SpringBoot解压ZIP后生成的JSON化代码结构
  * </p>
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

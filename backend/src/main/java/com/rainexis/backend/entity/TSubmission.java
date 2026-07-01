@@ -15,9 +15,6 @@ import lombok.Setter;
 /**
  * 提交记录表实体类
  * 学生提交的编程作业记录，支持多版本提交，每个学生每次作业可以有多个提交版本
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter
@@ -78,8 +75,6 @@ public class TSubmission implements Serializable {
     /** 当前关联的AI评分报告ID */
     @TableField("current_report_id")
     private Long currentReportId;
-
-    // ============ V1.1 新增字段 ============
 
     /** 关联代码结构ID，指向t_project_structure.id */
     @ApiModelProperty("关联t_project_structure.id")

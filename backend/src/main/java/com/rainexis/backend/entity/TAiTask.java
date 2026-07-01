@@ -14,9 +14,6 @@ import lombok.Setter;
 /**
  * AI评分任务表实体类
  * 记录每次AI评分任务的执行状态、使用的模型、Token消耗以及重试信息
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

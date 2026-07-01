@@ -14,9 +14,6 @@ import lombok.Setter;
 /**
  * 评分标准表实体类
  * 存储作业的评分标准/评分细则，支持手动录入和从Word/Excel文件自动解析两种来源
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter
@@ -34,14 +31,10 @@ public class TRubric implements Serializable {
     @TableField("assignment_id")
     private Long assignmentId;
 
-    // ============ V1.1 新增字段 ============
-
     /** 评分标准来源类型：manual（手动录入）/ auto（Word/Excel解析） */
     @ApiModelProperty("评分标准类型(manual=手动录入/auto=WordExcel解析)")
     @TableField("rubric_type")
     private String rubricType;
-
-    // ============ 原有字段继续 ============
 
     /** 评分标准文件的存储URL */
     @TableField("file_url")
@@ -51,8 +44,6 @@ public class TRubric implements Serializable {
     @ApiModelProperty("结构化评分标准")
     @TableField("rubric_json")
     private String rubricJson;
-
-    // ============ V1.1 新增字段(放在原有version之后) ============
 
     /** 评分标准版本号（旧版字段） */
     @TableField("version")
@@ -67,8 +58,6 @@ public class TRubric implements Serializable {
     @ApiModelProperty("Word/Excel解析后的完整JSON结构(冗余存储)")
     @TableField("parsed_json")
     private String parsedJson;
-
-    // ============ 原有字段继续 ============
 
     /** 是否为当前激活的评分标准 */
     @TableField("is_active")

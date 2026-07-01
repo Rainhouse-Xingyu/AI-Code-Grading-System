@@ -15,9 +15,6 @@ import lombok.Setter;
 /**
  * AI评分报告表实体类
  * 存储AI对提交作业的完整评分报告，包括总分、各维度得分、逐个文件分析及改进建议
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter
@@ -53,8 +50,6 @@ public class TAiReport implements Serializable {
     @TableField("score_json")
     private String scoreJson;
 
-    // ============ V1.1 新增字段 ============
-
     /** 分项评分详细结构（维度 → 得分 → 评语） */
     @ApiModelProperty("分项评分JSON结构(维度→得分→评语)")
     @TableField("score_detail_json")
@@ -69,8 +64,6 @@ public class TAiReport implements Serializable {
     @ApiModelProperty("本次评分消耗的token总数")
     @TableField("token_usage")
     private Integer tokenUsage;
-
-    // ============ 原有字段继续 ============
 
     /** AI生成的完整评分报告（Markdown格式） */
     @ApiModelProperty("AI生成报告")

@@ -15,9 +15,6 @@ import lombok.Setter;
 /**
  * 教师评审表实体类
  * 教师在AI评分的基础上进行人工复核，可修改评分和评语，形成最终成绩
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

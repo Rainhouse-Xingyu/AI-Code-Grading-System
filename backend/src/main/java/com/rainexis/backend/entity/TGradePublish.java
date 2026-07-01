@@ -15,9 +15,6 @@ import lombok.Setter;
 /**
  * 成绩发布表实体类
  * 管理最终成绩的发布状态，控制学生是否可查看成绩和评语报告
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter

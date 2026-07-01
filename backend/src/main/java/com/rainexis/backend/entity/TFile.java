@@ -14,9 +14,6 @@ import lombok.Setter;
 /**
  * 文件存储表实体类
  * 记录所有上传文件的元数据，包括原始文件名、存储名、文件类型和大小等
- *
- * @author xingyu
- * @since 2026-06-25
  */
 @Getter
 @Setter
