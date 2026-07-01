@@ -102,7 +102,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { messageOf } from "../JS/api.js";
 import { renderMarkdown } from "../JS/markdown.js";
 import MetricCard from "./MetricCard.vue";
@@ -189,7 +189,12 @@ async function upload(uploadFile) {
     await refresh();
     ElMessage.success("作业已提交，等待教师评分");
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    const message = messageOf(error);
+    if (message.includes("src目录") || message.includes("未发现受支持的代码文件")) {
+      ElMessageBox.alert("同学，可以直接将src目录进行压缩上传哦～", "上传提醒", { confirmButtonText: "知道了" });
+    } else {
+      ElMessage.error(message);
+    }
   } finally {
     window.setTimeout(() => {
       uploadProgress.value = 0;

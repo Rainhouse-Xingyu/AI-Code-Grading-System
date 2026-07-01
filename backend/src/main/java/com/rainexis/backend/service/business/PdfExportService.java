@@ -235,12 +235,12 @@ public class PdfExportService {
         return value == null ? "" : String.valueOf(value);
     }
 
-    /** 生成PDF文件名：学号-班级-姓名.pdf */
+    /** 生成PDF文件名：学号_姓名.pdf */
     private String pdfFilename(TUser student, Long submissionId) {
         if (student == null) {
             return "submission_" + submissionId + ".pdf";
         }
-        return safePart(student.getUsername()) + "-" + safePart(student.getClassName()) + "-" + safePart(student.getRealName()) + ".pdf";
+        return safePart(student.getUsername()) + "_" + safePart(student.getRealName()) + ".pdf";
     }
 
     /** 生成批量导出的ZIP文件名：作业标题_评分报告_日期.zip */

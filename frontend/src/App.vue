@@ -81,7 +81,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { Collection, Cpu, EditPen, Files, School, UploadFilled, User } from "@element-plus/icons-vue";
+import { Collection, Cpu, Download, EditPen, Files, School, UploadFilled, User } from "@element-plus/icons-vue";
 import { createApi, messageOf } from "./JS/api.js";
 import AuthView from "./components/AuthView.vue";
 import TeacherDesk from "./components/TeacherDesk.vue";
@@ -116,6 +116,7 @@ const teacherNavItems = computed(() => [
   ...(user.value?.role === "admin" ? [{ key: "templates", label: "评分模板", icon: Collection }] : []),
   { key: "submissions", label: "提交评分", icon: UploadFilled },
   { key: "tasks", label: "AI 任务", icon: Cpu },
+  { key: "downloads", label: "文件下载", icon: Download },
   { key: "review", label: "复核发布", icon: EditPen }
 ]);
 const passwordDialogVisible = ref(false);

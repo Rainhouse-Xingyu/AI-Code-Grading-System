@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS `t_ai_task` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `submission_id` bigint NOT NULL,
   `assignment_id` bigint NOT NULL,
+  `batch_id` varchar(64) DEFAULT NULL,
   `model_name` varchar(50) DEFAULT NULL,
   `status` varchar(20) DEFAULT 'pending',
   `prompt_tokens` int DEFAULT 0,
@@ -172,6 +173,7 @@ CREATE TABLE IF NOT EXISTS `t_ai_task` (
   `end_time` datetime DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  KEY `idx_ai_task_batch` (`batch_id`),
   KEY `idx_ai_task_assignment` (`assignment_id`),
   KEY `idx_ai_task_submission` (`submission_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -10,7 +10,10 @@ import com.rainexis.backend.mapper.TAiTaskMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.service.business.AccessControlService;
 import com.rainexis.backend.service.business.AiScoringService;
+import com.rainexis.backend.service.business.AiTaskDispatcherService;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,15 +33,18 @@ public class AiTaskApiController {
     private final TAiTaskMapper taskMapper;
     private final TAiLogMapper logMapper;
     private final AccessControlService accessControlService;
+    private final AiTaskDispatcherService dispatcherService;
 
     public AiTaskApiController(AiScoringService aiScoringService,
                                TAiTaskMapper taskMapper,
                                TAiLogMapper logMapper,
-                               AccessControlService accessControlService) {
+                               AccessControlService accessControlService,
+                               AiTaskDispatcherService dispatcherService) {
         this.aiScoringService = aiScoringService;
         this.taskMapper = taskMapper;
         this.logMapper = logMapper;
         this.accessControlService = accessControlService;
+        this.dispatcherService = dispatcherService;
     }
 
     /** 批量发起AI评分任务（单次最多200个，需CSRF Token） */
@@ -66,6 +72,44 @@ public class AiTaskApiController {
                 .stream()
                 .filter(task -> task.getSubmissionId() == null || accessControlService.canTeacherAccessSubmission(task.getSubmissionId()))
                 .toList());
+    }
+
+    @GetMapping("/progress")
+    public ApiResponse<Map<String, Object>> progress(@RequestParam(name = "assignment_id") Long assignmentId) {
+        AuthContext.requireTeacher();
+        accessControlService.requireAssignmentAccess(assignmentId);
+        List<TAiTask> tasks = taskMapper.selectList(new LambdaQueryWrapper<TAiTask>()
+                        .eq(TAiTask::getAssignmentId, assignmentId)
+                        .orderByDesc(TAiTask::getCreatedAt))
+                .stream()
+                .filter(task -> task.getSubmissionId() == null || accessControlService.canTeacherAccessSubmission(task.getSubmissionId()))
+                .toList();
+        Map<String, Long> statusCounts = new LinkedHashMap<>();
+        for (String status : List.of("pending", "running", "success", "failed")) {
+            statusCounts.put(status, tasks.stream().filter(task -> status.equals(task.getStatus())).count());
+        }
+        String latestBatchId = tasks.stream()
+                .map(TAiTask::getBatchId)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
+        List<TAiTask> latestBatchTasks = latestBatchId.isBlank()
+                ? List.of()
+                : tasks.stream().filter(task -> latestBatchId.equals(task.getBatchId())).toList();
+        Map<String, Long> latestBatchCounts = new LinkedHashMap<>();
+        for (String status : List.of("pending", "running", "success", "failed")) {
+            latestBatchCounts.put(status, latestBatchTasks.stream().filter(task -> status.equals(task.getStatus())).count());
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("assignmentId", assignmentId);
+        payload.put("total", tasks.size());
+        payload.put("statusCounts", statusCounts);
+        payload.put("activeTasks", dispatcherService.activeTasks());
+        payload.put("maxConcurrentTasks", dispatcherService.maxConcurrentTasks());
+        payload.put("latestBatchId", latestBatchId);
+        payload.put("latestBatchTotal", latestBatchTasks.size());
+        payload.put("latestBatchCounts", latestBatchCounts);
+        return ApiResponse.ok(payload);
     }
 
     /** 重试失败的AI评分任务 */

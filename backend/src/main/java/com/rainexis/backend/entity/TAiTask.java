@@ -35,6 +35,10 @@ public class TAiTask implements Serializable {
     @TableField("assignment_id")
     private Long assignmentId;
 
+    /** 教师一次批量发起评分生成的批次号 */
+    @TableField("batch_id")
+    private String batchId;
+
     /** AI模型名称：deepseek / local */
     @ApiModelProperty("deepseek / local")
     @TableField("model_name")

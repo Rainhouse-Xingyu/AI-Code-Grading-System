@@ -30,6 +30,7 @@ public class DatabaseMigrationConfig {
         createRubricTemplateTables();
         widenAssignmentClassName();
         ensureAssignmentRubricColumns();
+        ensureAiTaskColumns();
         jdbcTemplate.update("""
                 INSERT INTO t_assignment_class (assignment_id, class_name)
                 SELECT a.id, a.class_name
@@ -49,6 +50,10 @@ public class DatabaseMigrationConfig {
         addColumnIfMissing("t_assignment", "rubric_template_id", "BIGINT");
         addColumnIfMissing("t_assignment", "selected_rubric_item_ids", "LONGTEXT");
         addColumnIfMissing("t_assignment", "normalized_rubric_json", "LONGTEXT");
+    }
+
+    private void ensureAiTaskColumns() {
+        addColumnIfMissing("t_ai_task", "batch_id", "VARCHAR(64)");
     }
 
     private void createRubricTemplateTables() {

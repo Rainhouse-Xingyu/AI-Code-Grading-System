@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS t_ai_task (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   submission_id BIGINT NOT NULL,
   assignment_id BIGINT NOT NULL,
+  batch_id VARCHAR(64),
   model_name VARCHAR(50),
   status VARCHAR(20) DEFAULT 'pending',
   prompt_tokens INT DEFAULT 0,

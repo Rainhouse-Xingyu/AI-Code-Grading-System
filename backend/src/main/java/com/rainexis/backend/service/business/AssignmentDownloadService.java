@@ -22,6 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import java.util.zip.ZipInputStream;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -50,6 +51,24 @@ public class AssignmentDownloadService {
         return title + "_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".zip";
     }
 
+    public String reportsFilename(Long assignmentId) {
+        return baseAssignmentFilename(assignmentId) + "_reports_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".zip";
+    }
+
+    public String codesFilename(Long assignmentId) {
+        return baseAssignmentFilename(assignmentId) + "_codes_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".zip";
+    }
+
+    public String reportFilename(Long submissionId) {
+        TSubmission submission = requireSubmission(submissionId);
+        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + "-报告.md";
+    }
+
+    public String codeFilename(Long submissionId) {
+        TSubmission submission = requireSubmission(submissionId);
+        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + "-代码.zip";
+    }
+
     public void writeZip(Long assignmentId, List<Long> studentIds, OutputStream output) {
         List<TSubmission> submissions = querySubmissions(assignmentId, studentIds);
         try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
@@ -57,12 +76,54 @@ public class AssignmentDownloadService {
             for (TSubmission submission : submissions) {
                 TUser student = userMapper.selectById(submission.getStudentId());
                 String baseName = studentBaseName(student, submission);
-                writeReport(zip, baseName, submission);
-                writeCode(zip, baseName, submission, buffer);
+                writeCombinedReportEntry(zip, baseName, submission);
+                writeExpandedCodeEntries(zip, baseName, submission, buffer);
             }
         } catch (Exception ex) {
             throw new BusinessException(500, "打包下载失败: " + ex.getMessage());
         }
+    }
+
+    public void writeReportsZip(Long assignmentId, List<Long> studentIds, OutputStream output) {
+        List<TSubmission> submissions = querySubmissions(assignmentId, studentIds);
+        try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            for (TSubmission submission : submissions) {
+                TUser student = userMapper.selectById(submission.getStudentId());
+                writeReportEntry(zip, studentBaseName(student, submission), submission);
+            }
+        } catch (Exception ex) {
+            throw new BusinessException(500, "报告打包下载失败: " + ex.getMessage());
+        }
+    }
+
+    public void writeCodesZip(Long assignmentId, List<Long> studentIds, OutputStream output) {
+        List<TSubmission> submissions = querySubmissions(assignmentId, studentIds);
+        try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            byte[] buffer = new byte[8192];
+            for (TSubmission submission : submissions) {
+                TUser student = userMapper.selectById(submission.getStudentId());
+                writeCodeEntry(zip, studentBaseName(student, submission), submission, buffer);
+            }
+        } catch (Exception ex) {
+            throw new BusinessException(500, "代码打包下载失败: " + ex.getMessage());
+        }
+    }
+
+    public void writeSingleReport(Long submissionId, OutputStream output) {
+        try {
+            output.write(reportMarkdown(requireSubmission(submissionId)).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ex) {
+            throw new BusinessException(500, "报告下载失败: " + ex.getMessage());
+        }
+    }
+
+    public Path codePath(Long submissionId) {
+        TSubmission submission = requireSubmission(submissionId);
+        Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(source)) {
+            throw BusinessException.notFound("提交文件不存在");
+        }
+        return source;
     }
 
     private List<TSubmission> querySubmissions(Long assignmentId, List<Long> studentIds) {
@@ -76,9 +137,16 @@ public class AssignmentDownloadService {
         return submissionMapper.selectList(query);
     }
 
-    private void writeReport(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
+    private void writeReportEntry(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
         String markdown = reportMarkdown(submission);
         zip.putNextEntry(new ZipEntry(baseName + "-报告.md"));
+        zip.write(markdown.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+    }
+
+    private void writeCombinedReportEntry(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
+        String markdown = reportMarkdown(submission);
+        zip.putNextEntry(new ZipEntry(baseName + "/评分报告.md"));
         zip.write(markdown.getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
     }
@@ -98,7 +166,7 @@ public class AssignmentDownloadService {
         return "# 评分报告\n\n暂无评分报告。\n";
     }
 
-    private void writeCode(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
+    private void writeCodeEntry(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
         Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
         if (!Files.isRegularFile(source)) {
             return;
@@ -113,6 +181,28 @@ public class AssignmentDownloadService {
         zip.closeEntry();
     }
 
+    private void writeExpandedCodeEntries(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
+        Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(source)) {
+            return;
+        }
+        try (ZipInputStream input = new ZipInputStream(Files.newInputStream(source), StandardCharsets.UTF_8)) {
+            ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                String entryName = normalizeZipEntry(entry.getName());
+                if (entry.isDirectory() || entryName.isBlank()) {
+                    continue;
+                }
+                zip.putNextEntry(new ZipEntry(baseName + "/代码/" + entryName));
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    zip.write(buffer, 0, read);
+                }
+                zip.closeEntry();
+            }
+        }
+    }
+
     private String studentBaseName(TUser student, TSubmission submission) {
         if (student == null) {
             return "student-" + submission.getStudentId();
@@ -124,5 +214,26 @@ public class AssignmentDownloadService {
         return value == null || value.isBlank()
                 ? "unknown"
                 : value.replaceAll("[\\\\/:*?\"<>|\\s]+", "_");
+    }
+
+    private String normalizeZipEntry(String name) {
+        String normalized = Paths.get(name).normalize().toString().replace('\\', '/');
+        if (normalized.startsWith("../") || normalized.equals("..") || normalized.startsWith("/")) {
+            return "";
+        }
+        return normalized;
+    }
+
+    private TSubmission requireSubmission(Long submissionId) {
+        TSubmission submission = submissionMapper.selectById(submissionId);
+        if (submission == null) {
+            throw BusinessException.notFound("提交不存在");
+        }
+        return submission;
+    }
+
+    private String baseAssignmentFilename(Long assignmentId) {
+        TAssignment assignment = assignmentMapper.selectById(assignmentId);
+        return assignment == null ? "assignment_" + assignmentId : safePart(assignment.getTitle());
     }
 }

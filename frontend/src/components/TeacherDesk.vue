@@ -122,17 +122,8 @@
               <el-checkbox v-model="jointReviewEnabled" size="small">联合评审</el-checkbox>
               <el-button size="small" type="primary" @click="startScoring">批量评分</el-button>
               <el-button size="small" type="success" @click="publishAllGrades">一键推送</el-button>
-              <el-button size="small" :loading="packageDownloading" @click="downloadAllPackage">下载全部</el-button>
-              <el-button size="small" :disabled="!scoringSelection.length" :loading="packageDownloading" @click="downloadSelectedPackage">
-                下载选中
-              </el-button>
             </div>
           </div>
-          <el-progress
-            v-if="packageDownloadProgress > 0 && packageDownloadProgress < 100"
-            class="package-download-progress"
-            :percentage="packageDownloadProgress"
-          />
         </template>
         <el-table
           :data="submissions"
@@ -167,6 +158,7 @@
           <el-table-column label="操作" width="170">
             <template #default="{ row }">
               <el-button link type="primary" @click.stop="downloadSubmission(row.id)">ZIP</el-button>
+              <el-button link type="warning" @click.stop="returnSubmission(row)">打回</el-button>
               <el-button v-if="row.publishStatus !== 1" link type="primary" @click.stop="publishGrades([row])">推送</el-button>
               <el-button v-if="row.publishStatus === 1" link type="danger" @click.stop="retractGrades([row])">撤回</el-button>
             </template>
@@ -183,8 +175,22 @@
             <el-tag v-if="scoringPolling" size="small" type="warning">轮询中</el-tag>
           </div>
         </template>
+        <div v-if="taskProgress" class="task-progress-grid">
+          <MetricCard label="全部任务" :value="taskProgress.total || 0" />
+          <MetricCard label="等待中" :value="taskProgress.statusCounts?.pending || 0" />
+          <MetricCard label="执行中" :value="`${taskProgress.statusCounts?.running || 0}/${taskProgress.maxConcurrentTasks || 0}`" />
+          <MetricCard label="已完成" :value="taskProgress.statusCounts?.success || 0" />
+          <MetricCard label="失败" :value="taskProgress.statusCounts?.failed || 0" />
+        </div>
+        <el-progress
+          v-if="taskProgress?.latestBatchTotal"
+          class="task-batch-progress"
+          :percentage="latestBatchPercent"
+          :status="taskProgress.latestBatchCounts?.failed ? 'exception' : undefined"
+        />
         <el-table :data="tasks" height="210">
           <el-table-column prop="id" label="任务" width="70" />
+          <el-table-column prop="batchId" label="批次" min-width="120" show-overflow-tooltip />
           <el-table-column label="状态" width="96">
             <template #default="{ row }">
               <el-tag :type="taskStatusType(row.status)" size="small">{{ taskStatusText(row.status) }}</el-tag>
@@ -236,6 +242,70 @@
             <span v-if="log.durationMs">· {{ log.durationMs }}ms</span>
           </p>
         </div>
+      </el-card>
+        </section>
+
+        <section v-show="activeTeacherModule === 'downloads'" class="teacher-module-panel">
+      <el-card shadow="never">
+        <template #header>
+          <div class="card-head">
+            <span>文件下载</span>
+            <div class="toolbar">
+              <el-select
+                v-model="selectedAssignment"
+                size="small"
+                filterable
+                class="review-assignment-select"
+                placeholder="选择作业"
+              >
+                <el-option
+                  v-for="assignment in assignments"
+                  :key="assignment.id"
+                  :label="assignment.title"
+                  :value="assignment.id"
+                />
+              </el-select>
+              <el-button size="small" :loading="packageDownloading" @click="downloadAllReports">全部报告</el-button>
+              <el-button size="small" :loading="packageDownloading" @click="downloadAllCodes">全部代码</el-button>
+              <el-button size="small" type="primary" :loading="packageDownloading" @click="downloadAllPackage">合并下载</el-button>
+              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedReports">
+                选中报告
+              </el-button>
+              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedCodes">
+                选中代码
+              </el-button>
+              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedPackage">
+                选中合并
+              </el-button>
+            </div>
+          </div>
+          <el-progress
+            v-if="packageDownloadProgress > 0 && packageDownloadProgress < 100"
+            class="package-download-progress"
+            :percentage="packageDownloadProgress"
+          />
+        </template>
+        <el-table
+          :data="submissions"
+          height="360"
+          @selection-change="selectDownloadRows"
+        >
+          <el-table-column type="selection" width="44" />
+          <el-table-column prop="studentUsername" label="学号" width="120" />
+          <el-table-column prop="studentRealName" label="姓名" width="110" />
+          <el-table-column prop="fileName" label="文件" min-width="170" show-overflow-tooltip />
+          <el-table-column label="状态" width="96">
+            <template #default="{ row }">
+              <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="160">
+            <template #default="{ row }">
+              <el-button link type="primary" @click.stop="downloadReport(row.id)">报告</el-button>
+              <el-button link type="primary" @click.stop="downloadSubmission(row.id)">代码</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </el-card>
         </section>
 
@@ -497,6 +567,7 @@ const assignments = ref([]);
 const submissions = ref([]);
 const tasks = ref([]);
 const taskLogs = ref([]);
+const taskProgress = ref(null);
 const students = ref([]);
 const rubricTemplates = ref([]);
 const rubricTemplateItems = ref([]);
@@ -505,6 +576,7 @@ const studentUploadProgress = ref(0);
 const cleanupOlderThanDays = ref(180);
 const cleanupPreview = ref(null);
 const scoringSelection = ref([]);
+const downloadSelection = ref([]);
 const scoringPreviewVisible = ref(false);
 const scoringSubmitting = ref(false);
 const jointReviewEnabled = ref(false);
@@ -614,6 +686,13 @@ const selectedSubmissionRow = computed(() =>
 const selectedRubricTemplate = computed(() =>
   rubricTemplates.value.find((item) => item.id === assignmentForm.rubricTemplateId) || null
 );
+const latestBatchPercent = computed(() => {
+  const total = Number(taskProgress.value?.latestBatchTotal || 0);
+  if (!total) return 0;
+  const counts = taskProgress.value?.latestBatchCounts || {};
+  const done = Number(counts.success || 0) + Number(counts.failed || 0);
+  return Math.min(100, Math.round((done / total) * 100));
+});
 watch(dimensionTotal, (value) => {
   if (dimensionScores.value.length) {
     finalScore.value = value.toFixed(2);
@@ -655,21 +734,35 @@ async function refreshSubmissions() {
     return;
   }
   try {
-    const [nextSubmissions, nextTasks, nextStats] = await Promise.all([
+    const [nextSubmissions, nextTasks, nextStats, nextProgress] = await Promise.all([
       props.api.get(`/api/v1/submissions?assignment_id=${selectedAssignment.value}`),
       props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
-      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`)
+      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
+      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);
     submissions.value = nextSubmissions;
     scoringSelection.value = [];
+    downloadSelection.value = [];
     tasks.value = nextTasks;
     assignmentStats.value = nextStats;
+    taskProgress.value = nextProgress;
     if (!selectedSubmission.value && nextSubmissions[0]) {
       selectedSubmission.value = nextSubmissions[0].id;
     }
+    watchRunningTasks(nextTasks);
   } catch (error) {
     ElMessage.error(messageOf(error));
   }
+}
+
+function watchRunningTasks(nextTasks) {
+  const activeIds = nextTasks
+    .filter((task) => ["pending", "running"].includes(task.status))
+    .map((task) => task.id)
+    .filter(Boolean);
+  if (!activeIds.length || scoringPolling.value) return;
+  scoringWatchIds.value = activeIds;
+  startScoringPolling();
 }
 
 async function refreshActiveRubric() {
@@ -1060,6 +1153,10 @@ function selectScoringRows(rows) {
   scoringSelection.value = rows;
 }
 
+function selectDownloadRows(rows) {
+  downloadSelection.value = rows;
+}
+
 async function selectStudentFile(uploadFile) {
   if (!uploadFile.raw) return;
   const form = new FormData();
@@ -1255,14 +1352,16 @@ async function checkScoringProgress() {
     return;
   }
   try {
-    const [nextTasks, nextSubmissions, nextStats] = await Promise.all([
+    const [nextTasks, nextSubmissions, nextStats, nextProgress] = await Promise.all([
       props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
       props.api.get(`/api/v1/submissions?assignment_id=${selectedAssignment.value}`),
-      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`)
+      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
+      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);
     tasks.value = nextTasks;
     submissions.value = nextSubmissions;
     assignmentStats.value = nextStats;
+    taskProgress.value = nextProgress;
     refreshTokenQuota();
     refreshTokenStats();
     const watched = nextTasks.filter((task) => scoringWatchIds.value.includes(task.id));
@@ -1290,6 +1389,28 @@ async function retryTask(taskId) {
     ElMessage.success("失败任务已重试");
   } catch (error) {
     ElMessage.error(messageOf(error));
+  }
+}
+
+async function returnSubmission(row) {
+  if (!row?.id) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认将 ${row.studentUsername || ""}-${row.studentRealName || ""} 的作业打回重交？之前提交的文件、AI 报告和日志会被物理删除。`,
+      "打回重交",
+      {
+        type: "warning",
+        confirmButtonText: "确认打回",
+        cancelButtonText: "取消"
+      }
+    );
+    await props.api.post(`/api/v1/submissions/${row.id}/return`, {});
+    await refreshSubmissions();
+    ElMessage.success("已打回重交");
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(messageOf(error));
+    }
   }
 }
 
@@ -1659,7 +1780,13 @@ function downloadStudentTemplate() {
 }
 
 function downloadSubmission(submissionId) {
-  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download`, `submission-${submissionId}.zip`);
+  const row = submissions.value.find((item) => item.id === submissionId);
+  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download`, `${studentDownloadBase(row)}-代码.zip`);
+}
+
+function downloadReport(submissionId) {
+  const row = submissions.value.find((item) => item.id === submissionId);
+  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download-report`, `${studentDownloadBase(row)}-报告.md`);
 }
 
 async function downloadAllPackage() {
@@ -1670,12 +1797,28 @@ async function downloadAllPackage() {
   await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-all`);
 }
 
+async function downloadAllReports() {
+  if (!selectedAssignment.value) {
+    ElMessage.warning("请先选择作业");
+    return;
+  }
+  await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-reports`, "报告包");
+}
+
+async function downloadAllCodes() {
+  if (!selectedAssignment.value) {
+    ElMessage.warning("请先选择作业");
+    return;
+  }
+  await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-codes`, "代码包");
+}
+
 async function downloadSelectedPackage() {
   if (!selectedAssignment.value) {
     ElMessage.warning("请先选择作业");
     return;
   }
-  const studentIds = [...new Set(scoringSelection.value.map((item) => item.studentId).filter(Boolean))];
+  const studentIds = selectedDownloadStudentIds();
   if (studentIds.length === 0) {
     ElMessage.warning("请先勾选要下载的提交");
     return;
@@ -1685,7 +1828,41 @@ async function downloadSelectedPackage() {
   await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-selected?${params.toString()}`);
 }
 
-async function downloadAssignmentPackage(url) {
+async function downloadSelectedReports() {
+  if (!selectedAssignment.value) {
+    ElMessage.warning("请先选择作业");
+    return;
+  }
+  const studentIds = selectedDownloadStudentIds();
+  if (!studentIds.length) {
+    ElMessage.warning("请先勾选要下载的提交");
+    return;
+  }
+  const params = new URLSearchParams();
+  params.set("studentIds", studentIds.join(","));
+  await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-reports?${params.toString()}`, "报告包");
+}
+
+async function downloadSelectedCodes() {
+  if (!selectedAssignment.value) {
+    ElMessage.warning("请先选择作业");
+    return;
+  }
+  const studentIds = selectedDownloadStudentIds();
+  if (!studentIds.length) {
+    ElMessage.warning("请先勾选要下载的提交");
+    return;
+  }
+  const params = new URLSearchParams();
+  params.set("studentIds", studentIds.join(","));
+  await downloadAssignmentPackage(`/api/v1/assignments/${selectedAssignment.value}/download-codes?${params.toString()}`, "代码包");
+}
+
+function selectedDownloadStudentIds() {
+  return [...new Set(downloadSelection.value.map((item) => item.studentId).filter(Boolean))];
+}
+
+async function downloadAssignmentPackage(url, label = "提交包") {
   const assignment = assignments.value.find((item) => item.id === selectedAssignment.value);
   packageDownloading.value = true;
   packageDownloadProgress.value = 1;
@@ -1696,7 +1873,7 @@ async function downloadAssignmentPackage(url) {
     showClose: true
   });
   try {
-    await props.api.downloadGet(url, assignmentPackageFilename(assignment), {
+    await props.api.downloadGet(url, assignmentPackageFilename(assignment, label), {
       onProgress: (percent) => {
         packageDownloadProgress.value = percent;
       }
@@ -1711,9 +1888,9 @@ async function downloadAssignmentPackage(url) {
   }
 }
 
-function assignmentPackageFilename(assignment) {
+function assignmentPackageFilename(assignment, label = "提交包") {
   const title = safeFilename(assignment?.title || "作业提交");
-  return `${title}_提交包_${new Date().toISOString().slice(0, 10)}.zip`;
+  return `${title}_${label}_${new Date().toISOString().slice(0, 10)}.zip`;
 }
 
 function downloadSingle() {
@@ -1750,5 +1927,10 @@ function batchExportFilename() {
 
 function safeFilename(value) {
   return String(value || "file").replace(/[\\/:*?"<>|\s]+/g, "_");
+}
+
+function studentDownloadBase(row) {
+  if (!row) return "student";
+  return `${safeFilename(row.studentUsername || row.studentId || "student")}-${safeFilename(row.studentRealName || row.id)}`;
 }
 </script>

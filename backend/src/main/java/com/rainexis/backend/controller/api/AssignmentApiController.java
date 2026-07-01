@@ -121,6 +121,7 @@ public class AssignmentApiController {
                     .orderByDesc(TAssignment::getCreatedAt));
             return ApiResponse.ok(assignmentClassService.attachClassNames(assignments.stream()
                     .filter(assignment -> assignmentClassService.includesClass(assignment, current.className()))
+                    .filter(this::studentCanSeeAssignment)
                     .toList()));
         }
         List<TAssignment> assignments = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>()
@@ -315,16 +316,58 @@ public class AssignmentApiController {
         return downloadZip(id, ids);
     }
 
+    @GetMapping("/{id}/download-reports")
+    public ResponseEntity<StreamingResponseBody> downloadReports(@PathVariable Long id,
+                                                                 @RequestParam(required = false) String studentIds) {
+        AuthContext.requireTeacher();
+        TAssignment assignment = accessControlService.requireAssignmentAccess(id);
+        List<Long> ids = parseVisibleStudentIds(assignment, studentIds);
+        StreamingResponseBody body = output -> assignmentDownloadService.writeReportsZip(id, ids, output);
+        return streamZip(assignmentDownloadService.reportsFilename(id), body);
+    }
+
+    @GetMapping("/{id}/download-codes")
+    public ResponseEntity<StreamingResponseBody> downloadCodes(@PathVariable Long id,
+                                                               @RequestParam(required = false) String studentIds) {
+        AuthContext.requireTeacher();
+        TAssignment assignment = accessControlService.requireAssignmentAccess(id);
+        List<Long> ids = parseVisibleStudentIds(assignment, studentIds);
+        StreamingResponseBody body = output -> assignmentDownloadService.writeCodesZip(id, ids, output);
+        return streamZip(assignmentDownloadService.codesFilename(id), body);
+    }
+
     private ResponseEntity<StreamingResponseBody> downloadZip(Long assignmentId, List<Long> studentIds) {
         String filename = assignmentDownloadService.filename(assignmentId);
         StreamingResponseBody body = output -> assignmentDownloadService.writeZip(assignmentId, studentIds, output);
+        return streamZip(filename, body);
+    }
+
+    private ResponseEntity<StreamingResponseBody> streamZip(String filename, StreamingResponseBody body) {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(filename, StandardCharsets.UTF_8)
                         .build()
-                        .toString())
+                .toString())
                 .body(body);
+    }
+
+    private List<Long> parseVisibleStudentIds(TAssignment assignment, String studentIds) {
+        if (studentIds == null || studentIds.isBlank()) {
+            return visibleStudentIds(assignment, false);
+        }
+        List<Long> ids = List.of(studentIds.split(",")).stream()
+                .filter(value -> !value.isBlank())
+                .map(Long::valueOf)
+                .toList();
+        if (ids.isEmpty()) {
+            throw BusinessException.badRequest("请选择学生");
+        }
+        List<Long> visibleStudentIds = visibleStudentIds(assignment, true);
+        if (!visibleStudentIds.containsAll(ids)) {
+            throw BusinessException.forbidden("只能下载可访问班级的学生提交");
+        }
+        return ids;
     }
 
     private String latePolicy(String value) {
@@ -335,6 +378,13 @@ public class AssignmentApiController {
             throw BusinessException.badRequest("迟交策略无效");
         }
         return value;
+    }
+
+    private boolean studentCanSeeAssignment(TAssignment assignment) {
+        if (assignment.getEndTime() == null || !LocalDateTime.now().isAfter(assignment.getEndTime())) {
+            return true;
+        }
+        return !"forbid".equals(latePolicy(assignment.getLatePolicy()));
     }
 
     private Integer latePenaltyPercent(Integer value) {

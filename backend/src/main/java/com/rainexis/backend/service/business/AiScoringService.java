@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -78,6 +79,7 @@ public class AiScoringService {
     private final int maxCompletionTokens;
     private final boolean enableRemote;
     private final boolean queueEnabled;
+    private final boolean dispatcherEnabled;
 
     public AiScoringService(TAiTaskMapper taskMapper,
                             TAiLogMapper logMapper,
@@ -100,7 +102,8 @@ public class AiScoringService {
                             @Value("${app.ai.local-timeout-seconds}") int localTimeoutSeconds,
                             @Value("${app.ai.max-completion-tokens}") int maxCompletionTokens,
                             @Value("${app.ai.enable-remote}") boolean enableRemote,
-                            @Value("${app.ai.queue-enabled}") boolean queueEnabled) {
+                            @Value("${app.ai.queue-enabled}") boolean queueEnabled,
+                            @Value("${app.ai.dispatcher-enabled}") boolean dispatcherEnabled) {
         this.taskMapper = taskMapper;
         this.logMapper = logMapper;
         this.reportMapper = reportMapper;
@@ -123,6 +126,7 @@ public class AiScoringService {
         this.maxCompletionTokens = maxCompletionTokens;
         this.enableRemote = enableRemote;
         this.queueEnabled = queueEnabled;
+        this.dispatcherEnabled = dispatcherEnabled;
         this.webClient = WebClient.builder().baseUrl(deepSeekBaseUrl).build();
     }
 
@@ -137,19 +141,24 @@ public class AiScoringService {
             throw BusinessException.badRequest("请选择待评分提交");
         }
         List<TAiTask> tasks = new ArrayList<>();
+        String batchId = UUID.randomUUID().toString();
+        TRubric rubric = activeRubric(assignmentId);
         for (Long submissionId : submissionIds) {
             TSubmission submission = submissionMapper.selectById(submissionId);
             if (submission == null || !assignmentId.equals(submission.getAssignmentId())) {
                 throw BusinessException.notFound("提交不存在: " + submissionId);
             }
+            if (List.of("scoring", "scored", "reviewed", "published").contains(submission.getStatus())) {
+                throw BusinessException.conflict("提交已进入评分阶段: " + submissionId);
+            }
             TProjectStructure structure = structureMapper.selectById(submission.getProjectStructureId());
-            TRubric rubric = activeRubric(assignmentId);
             if (structure == null) {
                 throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
             }
             TAiTask task = new TAiTask();
             task.setAssignmentId(assignmentId);
             task.setSubmissionId(submissionId);
+            task.setBatchId(batchId);
             task.setModelName(model);
             task.setStatus("pending");
             task.setPromptTokens(0);
@@ -157,23 +166,10 @@ public class AiScoringService {
             task.setTotalTokens(0);
             task.setRetryCount(0);
             taskMapper.insert(task);
-            log(task, "INFO", "AI 评分任务已创建", task.getModelName(), 0);
+            log(task, "INFO", dispatcherEnabled ? "AI 评分任务已创建，等待后台调度" : "AI 评分任务已创建", task.getModelName(), 0);
             submission.setStatus("scoring");
             submissionMapper.updateById(submission);
-            if (queueEnabled) {
-                try {
-                    pushQueue(task, submission, structure, rubric, jointReview ? previousReportMarkdown(submission) : "");
-                } catch (BusinessException ex) {
-                    task.setStatus("failed");
-                    task.setErrorMessage(ex.getMessage());
-                    task.setEndTime(LocalDateTime.now());
-                    taskMapper.updateById(task);
-                    log(task, "ERROR", "AI 评分任务入队失败: " + ex.getMessage(), task.getModelName(), 0);
-                    submission.setStatus("failed");
-                    submissionMapper.updateById(submission);
-                    throw ex;
-                }
-            } else {
+            if (!dispatcherEnabled) {
                 processTask(task.getId(), jointReview);
             }
             tasks.add(taskMapper.selectById(task.getId()));
@@ -190,6 +186,7 @@ public class AiScoringService {
         if (!"failed".equals(task.getStatus())) {
             throw BusinessException.conflict("仅失败任务可重试");
         }
+        task.setBatchId(task.getBatchId() == null || task.getBatchId().isBlank() ? UUID.randomUUID().toString() : task.getBatchId());
         task.setStatus("pending");
         task.setErrorMessage(null);
         task.setStartTime(null);
@@ -205,16 +202,7 @@ public class AiScoringService {
             submission.setStatus("scoring");
             submissionMapper.updateById(submission);
         }
-        if (queueEnabled) {
-            TProjectStructure structure = structureMapper.selectById(submission.getProjectStructureId());
-            TRubric rubric = activeRubric(task.getAssignmentId());
-            if (structure == null) {
-                throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
-            }
-            pushQueue(task, submission, structure, rubric, "");
-            return taskMapper.selectById(taskId);
-        }
-        return processTask(taskId);
+        return dispatcherEnabled ? taskMapper.selectById(taskId) : processTask(taskId);
     }
 
     /** 同步执行单个AI评分任务：获取代码结构+评分标准 → 调AI → 保存报告 */
@@ -233,17 +221,25 @@ public class AiScoringService {
         log(task, "INFO", "AI 评分任务开始执行", task.getModelName(), 0);
         try {
             TSubmission submission = submissionMapper.selectById(task.getSubmissionId());
+            if (submission == null) {
+                throw BusinessException.notFound("提交不存在");
+            }
+            logProgress(task, "读取提交代码结构");
             TProjectStructure structure = structureMapper.selectById(submission.getProjectStructureId());
+            logProgress(task, "读取评分标准");
             TRubric rubric = activeRubric(task.getAssignmentId());
             if (structure == null) {
                 throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
             }
+            logProgress(task, "构建评分 Prompt 并调用模型");
             Map<String, Object> result = scoreWithFallback(
                     structure.getStructureJson(),
                     rubric.getRubricJson(),
                     jointReview ? previousReportMarkdown(submission) : ""
             );
+            logProgress(task, "模型返回结果，开始校验评分结构");
             validateResult(result, rubric.getRubricJson());
+            logProgress(task, "评分结构校验通过，写入 AI 报告");
             TAiReport report = saveReport(task, result);
             logFallbackReason(task, result, report.getModelName());
             submission.setStatus("scored");
@@ -289,6 +285,7 @@ public class AiScoringService {
                     throw BusinessException.badRequest("AI 回调缺少评分结果");
                 }
                 TRubric rubric = activeRubric(task.getAssignmentId());
+                validateCallbackDimensionCoverage(result, rubric.getRubricJson());
                 validateResult(result, rubric.getRubricJson());
                 TAiReport report = saveReport(task, result);
                 logFallbackReason(task, result, report.getModelName());
@@ -614,6 +611,29 @@ public class AiScoringService {
             requiredText(issue, "file", "AI 返回问题缺少 file");
             requiredValue(issue, "line", "AI 返回问题缺少 line");
             requiredText(issue, "description", "AI 返回问题缺少 description");
+        }
+    }
+
+    private void validateCallbackDimensionCoverage(Map<String, Object> result, String rubricJson) throws Exception {
+        Map<String, Object> rubric = objectMapper.readValue(rubricJson, new TypeReference<>() {
+        });
+        List<Map<String, Object>> rubricDimensions = (List<Map<String, Object>>) rubric.getOrDefault("dimensions", List.of());
+        if (rubricDimensions.isEmpty()) {
+            return;
+        }
+        if (!(result.get("dimension_scores") instanceof List<?> returnedDimensions)) {
+            throw BusinessException.badRequest("AI 返回缺少 dimension_scores");
+        }
+        Set<String> returnedNames = new HashSet<>();
+        for (Object value : returnedDimensions) {
+            if (value instanceof Map<?, ?> dimension && dimension.get("name") != null) {
+                returnedNames.add(String.valueOf(dimension.get("name")));
+            }
+        }
+        for (Map<String, Object> dimension : rubricDimensions) {
+            if (!returnedNames.contains(requiredText(dimension, "name", "Rubric 维度缺少 name"))) {
+                throw BusinessException.badRequest("AI 返回维度未覆盖评分标准");
+            }
         }
     }
 
@@ -1102,6 +1122,16 @@ public class AiScoringService {
         log.setDurationMs(durationMs);
         log.setCreatedAt(LocalDateTime.now());
         logMapper.insert(log);
+    }
+
+    public void logTask(TAiTask task, String level, String message, long durationMs) {
+        log(task, level, message, task == null ? model : task.getModelName(), durationMs);
+    }
+
+    private void logProgress(TAiTask task, String message) {
+        if (dispatcherEnabled) {
+            log(task, "INFO", message, task.getModelName(), durationMs(task));
+        }
     }
 
     /** 如果模型链路发生降级，将原因写入任务日志，方便教师和运维排查。 */

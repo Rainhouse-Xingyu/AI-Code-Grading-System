@@ -71,7 +71,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.data.redis.password=",
         "app.storage.root=${java.io.tmpdir}/ai-code-grading-test-uploads",
         "app.upload-dir=${java.io.tmpdir}/ai-code-grading-test-uploads",
-        "app.ai.enable-remote=false"
+        "app.ai.enable-remote=false",
+        "app.ai.dispatcher-enabled=false"
 })
 class EndToEndWorkflowTests {
     @Autowired
