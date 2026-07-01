@@ -1,0 +1,31 @@
+.auth-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(520px, 100%);
+  border-radius: 8px;
+}
+
+.brand-block {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.brand-block .el-icon {
+  color: #1c6dd0;
+}
+
+.auth-mode {
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.wide-button {
+  width: 100%;
+}

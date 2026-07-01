@@ -1,0 +1,2 @@
+ALTER TABLE `t_user`
+    ADD COLUMN `phone` VARCHAR(30) DEFAULT NULL COMMENT '手机号' AFTER `email`;

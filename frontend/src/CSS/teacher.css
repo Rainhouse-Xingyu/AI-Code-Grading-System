@@ -1,0 +1,397 @@
+.teacher-module-content {
+  min-width: 0;
+}
+
+.teacher-module-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.teacher-desk .assignment-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 0 14px;
+}
+
+.teacher-desk .wide-field {
+  grid-column: 1 / -1;
+}
+
+.assignment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.rubric-template-picker {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e4e9f1;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfcfe;
+}
+
+.template-picker-head,
+.template-item-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.template-picker-head strong {
+  color: #1849a9;
+}
+
+.rubric-picker-summary,
+.rubric-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rubric-picker-summary span,
+.rubric-dialog-head span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.rubric-dialog-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  max-height: 460px;
+  margin-top: 14px;
+  overflow: auto;
+  border: 1px solid #e4e9f1;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fbfcfe;
+}
+
+.rubric-dialog-list .el-checkbox {
+  align-items: flex-start;
+  min-height: 34px;
+  margin-right: 0;
+  white-space: normal;
+}
+
+.rubric-dialog-list .el-checkbox__label {
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.assignment-form .el-date-editor {
+  width: 100%;
+}
+
+.action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.initial-password-input {
+  width: 180px;
+}
+
+.student-search-input {
+  width: 220px;
+}
+
+.upload-progress,
+.upload-progress-stack {
+  margin-top: 12px;
+}
+
+.upload-progress-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.student-create-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 0 10px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.student-table {
+  margin-top: 12px;
+}
+
+.assignment-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.metric-row {
+  margin-top: 16px;
+}
+
+.storage-cleanup-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  border-top: 1px solid #e4e9f1;
+  padding-top: 14px;
+}
+
+.template-admin-grid {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.template-editor {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.template-editor form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 90px;
+  gap: 0 12px;
+  align-items: end;
+}
+
+.template-item-table .el-input-number {
+  width: 100%;
+}
+
+.package-download-progress {
+  margin-top: 10px;
+}
+
+.cleanup-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.log-box {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid #e4e9f1;
+  border-radius: 6px;
+  padding: 10px;
+  background: #fbfcfe;
+}
+
+.log-box p {
+  color: #344054;
+  font-size: 12px;
+}
+
+.token-quota-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.quota-alert {
+  margin-top: 10px;
+}
+
+.token-stats-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.token-stats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #344054;
+  font-size: 13px;
+}
+
+.review-workspace {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.review-assignment-select {
+  width: 220px;
+}
+
+.review-submission-list {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.review-list-head,
+.review-current-student {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-list-head span,
+.review-current-student span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.review-submission-list .el-table__row {
+  cursor: pointer;
+}
+
+.review-submission-list .active-review-row td.el-table__cell {
+  background: #eef4ff;
+}
+
+.review-detail {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 2.25fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.review-meta-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.review-score-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dimension-table {
+  width: 100%;
+}
+
+.dimension-table .el-input-number {
+  width: 100%;
+}
+
+.issue-block {
+  display: grid;
+  gap: 8px;
+}
+
+.issue-block h3 {
+  color: #172033;
+  font-size: 15px;
+}
+
+.issue-table {
+  width: 100%;
+}
+
+.markdown-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.markdown-editor textarea {
+  min-height: 360px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.rubric-preview {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid #d8e0ec;
+  border-radius: 6px;
+  padding: 14px;
+  background: #101828;
+  color: #f8fafc;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.compare-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.compare-selectors,
+.compare-summary-grid,
+.compare-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.compare-summary-grid {
+  grid-template-columns: minmax(0, 1fr) 130px minmax(0, 1fr);
+}
+
+.compare-table {
+  width: 100%;
+}
+
+.compare-columns {
+  align-items: start;
+}
+
+.compare-columns section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compare-columns h3 {
+  color: #172033;
+  font-size: 15px;
+}
+
+@media (max-width: 1020px) {
+  .review-grid,
+  .review-detail,
+  .review-workspace,
+  .markdown-editor-grid,
+  .compare-selectors,
+  .compare-summary-grid,
+  .compare-columns,
+  .template-admin-grid,
+  .template-editor form,
+  .teacher-desk .assignment-form,
+  .student-create-form {
+    grid-template-columns: 1fr;
+  }
+
+  .assignment-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .token-quota-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cleanup-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .rubric-dialog-list {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,57 @@
+.student-upload,
+.student-grade-button {
+  margin-top: 14px;
+}
+
+.student-report {
+  display: grid;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.student-score-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.student-score-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.teacher-comment,
+.student-dimension-block {
+  display: grid;
+  gap: 8px;
+}
+
+.teacher-comment {
+  padding: 12px;
+  border: 1px solid #e4e9f1;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.teacher-comment h3,
+.student-dimension-block h3 {
+  color: #172033;
+  font-size: 15px;
+}
+
+.teacher-comment p {
+  color: #344054;
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .student-report {
+    grid-template-columns: 1fr;
+  }
+
+  .student-score-grid {
+    grid-template-columns: 1fr;
+  }
+}
