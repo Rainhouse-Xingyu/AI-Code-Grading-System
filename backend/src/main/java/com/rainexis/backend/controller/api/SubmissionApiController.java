@@ -22,15 +22,10 @@ import com.rainexis.backend.service.business.FileStorageService;
 import com.rainexis.backend.service.business.SubmissionCleanupService;
 import com.rainexis.backend.service.business.ZipStructureService;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -185,27 +180,23 @@ public class SubmissionApiController {
         return ApiResponse.ok(submissions.stream().map(this::submissionPayload).toList());
     }
 
-    /** 教师/学生下载提交的原始文件 */
+    /** 教师/学生下载提交代码 ZIP */
     @GetMapping("/{submissionId}/download")
-    public ResponseEntity<Resource> download(@PathVariable Long submissionId) {
-        TSubmission submission;
+    public ResponseEntity<StreamingResponseBody> download(@PathVariable Long submissionId) {
         if ("student".equals(AuthContext.get().role())) {
-            submission = accessControlService.requireStudentOwnSubmission(submissionId);
+            accessControlService.requireStudentOwnSubmission(submissionId);
         } else {
-            submission = accessControlService.requireTeacherSubmissionAccess(submissionId);
+            accessControlService.requireTeacherSubmissionAccess(submissionId);
         }
-        Path path = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(path)) {
-            throw BusinessException.notFound("提交文件不存在");
-        }
-        String filename = path.getFileName().toString();
+        String filename = assignmentDownloadService.codeFilename(submissionId);
+        StreamingResponseBody body = output -> assignmentDownloadService.writeSingleCodeZip(submissionId, output);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(filename, StandardCharsets.UTF_8)
                         .build()
-                .toString())
-                .body(new FileSystemResource(path));
+                        .toString())
+                .body(body);
     }
 
     /** 教师单独下载某份提交的 Markdown 评分报告 */

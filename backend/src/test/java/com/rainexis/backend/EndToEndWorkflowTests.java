@@ -188,14 +188,19 @@ class EndToEndWorkflowTests {
                         && "src/main/java/com/example/util/Message.java".equals(item.get("to_file").asText()));
         assertThat(dependencyGraph.get("dependency_graph").asText()).contains("Message.java");
 
-        mockMvc.perform(get("/api/v1/submissions/" + submissionId + "/download")
-                        .header("Authorization", bearer(studentToken)))
+        mockMvc.perform(asyncDispatch(mockMvc.perform(get("/api/v1/submissions/" + submissionId + "/download")
+                                .header("Authorization", bearer(studentToken)))
+                        .andExpect(request().asyncStarted())
+                        .andReturn()))
                 .andExpect(status().isOk())
-                .andExpect(result -> assertThat(result.getResponse().getContentAsByteArray()).isNotEmpty());
-        mockMvc.perform(get("/api/v1/submissions/" + submissionId + "/download")
-                        .header("Authorization", bearer(teacherToken)))
+                .andExpect(result -> assertThat(zipEntryNames(result.getResponse().getContentAsByteArray()))
+                        .contains("src/main/java/com/example/Main.java"));
+        mockMvc.perform(asyncDispatch(mockMvc.perform(get("/api/v1/submissions/" + submissionId + "/download")
+                                .header("Authorization", bearer(teacherToken)))
+                        .andExpect(request().asyncStarted())
+                        .andReturn()))
                 .andExpect(status().isOk())
-                .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition")).contains("s001_Alice.zip"));
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition")).contains("s001-Alice.zip"));
 
         mockMvc.perform(get("/api/v1/submissions")
                         .param("assignment_id", String.valueOf(assignmentId))
@@ -274,10 +279,13 @@ class EndToEndWorkflowTests {
         Set<String> packageEntries = zipEntryNames(allPackage);
         assertThat(packageEntries).contains(
                 "s001-Alice/评分报告.md",
-                "s001-Alice/代码/src/main/java/com/example/Main.java",
-                "s001-Alice/代码/src/main/java/com/example/util/Message.java"
+                "s001-Alice/s001-Alice.zip"
         );
         assertThat(zipText(allPackage, "s001-Alice/评分报告.md")).contains("教师最终报告");
+        assertThat(zipEntryNames(zipEntries(allPackage).get("s001-Alice/s001-Alice.zip"))).contains(
+                "src/main/java/com/example/Main.java",
+                "src/main/java/com/example/util/Message.java"
+        );
 
         Long studentId = userMapper.selectOne(new LambdaQueryWrapper<TUser>()
                 .eq(TUser::getUsername, "s001")
@@ -289,7 +297,7 @@ class EndToEndWorkflowTests {
                         .andReturn()))
                 .andExpect(status().isOk())
                 .andExpect(result -> assertThat(zipEntryNames(result.getResponse().getContentAsByteArray()))
-                        .contains("s001-Alice/评分报告.md"));
+                        .contains("s001-Alice/评分报告.md", "s001-Alice/s001-Alice.zip"));
 
         mockMvc.perform(post("/api/v1/grade-publish/push")
                         .header("Authorization", bearer(teacherToken))

@@ -1782,7 +1782,7 @@ function downloadStudentTemplate() {
 
 function downloadSubmission(submissionId) {
   const row = submissions.value.find((item) => item.id === submissionId);
-  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download`, `${studentDownloadBase(row)}-代码.zip`);
+  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download`, `${studentDownloadBase(row)}.zip`);
 }
 
 function downloadReport(submissionId) {

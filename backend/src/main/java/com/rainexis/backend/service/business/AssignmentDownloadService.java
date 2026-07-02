@@ -16,6 +16,7 @@ import com.rainexis.backend.mapper.TProjectStructureMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TTeacherReviewMapper;
 import com.rainexis.backend.mapper.TUserMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import java.util.zip.ZipInputStream;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -77,18 +77,17 @@ public class AssignmentDownloadService {
 
     public String codeFilename(Long submissionId) {
         TSubmission submission = requireSubmission(submissionId);
-        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + "-代码.zip";
+        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + ".zip";
     }
 
     public void writeZip(Long assignmentId, List<Long> studentIds, OutputStream output) {
         List<TSubmission> submissions = querySubmissions(assignmentId, studentIds);
         try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
-            byte[] buffer = new byte[8192];
             for (TSubmission submission : submissions) {
                 TUser student = userMapper.selectById(submission.getStudentId());
                 String baseName = studentBaseName(student, submission);
                 writeCombinedReportEntry(zip, baseName, submission);
-                writeExpandedCodeEntries(zip, baseName, submission, buffer);
+                writeStudentCodeZipEntry(zip, baseName + "/" + baseName + ".zip", submission);
             }
         } catch (Exception ex) {
             throw new BusinessException(500, "打包下载失败: " + ex.getMessage());
@@ -110,10 +109,10 @@ public class AssignmentDownloadService {
     public void writeCodesZip(Long assignmentId, List<Long> studentIds, OutputStream output) {
         List<TSubmission> submissions = querySubmissions(assignmentId, studentIds);
         try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
-            byte[] buffer = new byte[8192];
             for (TSubmission submission : submissions) {
                 TUser student = userMapper.selectById(submission.getStudentId());
-                writeCodeEntry(zip, studentBaseName(student, submission), submission, buffer);
+                String baseName = studentBaseName(student, submission);
+                writeStudentCodeZipEntry(zip, baseName + ".zip", submission);
             }
         } catch (Exception ex) {
             throw new BusinessException(500, "代码打包下载失败: " + ex.getMessage());
@@ -128,13 +127,18 @@ public class AssignmentDownloadService {
         }
     }
 
-    public Path codePath(Long submissionId) {
-        TSubmission submission = requireSubmission(submissionId);
-        Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(source)) {
-            throw BusinessException.notFound("提交文件不存在");
+    public void writeSingleCodeZip(Long submissionId, OutputStream output) {
+        try {
+            byte[] codeZip = studentCodeZipBytes(requireSubmission(submissionId));
+            if (codeZip.length == 0) {
+                throw BusinessException.notFound("提交代码文件不存在");
+            }
+            output.write(codeZip);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "代码下载失败: " + ex.getMessage());
         }
-        return source;
     }
 
     private List<TSubmission> querySubmissions(Long assignmentId, List<Long> studentIds) {
@@ -177,78 +181,57 @@ public class AssignmentDownloadService {
         return "# 评分报告\n\n暂无评分报告。\n";
     }
 
-    private void writeCodeEntry(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
-        Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(source)) {
+    private void writeStudentCodeZipEntry(ZipOutputStream zip, String entryName, TSubmission submission) throws Exception {
+        byte[] codeZip = studentCodeZipBytes(submission);
+        if (codeZip.length == 0) {
             return;
         }
-        zip.putNextEntry(new ZipEntry(baseName + "-代码.zip"));
-        try (var input = Files.newInputStream(source)) {
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                zip.write(buffer, 0, read);
-            }
-        }
+        zip.putNextEntry(new ZipEntry(entryName));
+        zip.write(codeZip);
         zip.closeEntry();
     }
 
-    private void writeExpandedCodeEntries(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
+    private byte[] studentCodeZipBytes(TSubmission submission) throws Exception {
         Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(source)) {
-            writeCodeEntriesFromStructure(zip, baseName, submission);
-            return;
-        }
-        boolean wroteAny = false;
-        try (ZipInputStream input = new ZipInputStream(Files.newInputStream(source), StandardCharsets.UTF_8)) {
-            ZipEntry entry;
-            while ((entry = input.getNextEntry()) != null) {
-                String entryName = normalizeZipEntry(entry.getName());
-                if (entry.isDirectory() || entryName.isBlank()) {
-                    continue;
-                }
-                zip.putNextEntry(new ZipEntry(baseName + "/代码/" + entryName));
-                int read;
-                while ((read = input.read(buffer)) >= 0) {
-                    zip.write(buffer, 0, read);
-                }
-                zip.closeEntry();
-                wroteAny = true;
-            }
-        }
-        if (!wroteAny) {
-            writeCodeEntriesFromStructure(zip, baseName, submission);
-        }
+        return Files.isRegularFile(source)
+                ? Files.readAllBytes(source)
+                : codeZipFromStructure(submission);
     }
 
-    private void writeCodeEntriesFromStructure(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
+    private byte[] codeZipFromStructure(TSubmission submission) throws Exception {
         TProjectStructure structure = submission.getProjectStructureId() == null
                 ? null
                 : structureMapper.selectById(submission.getProjectStructureId());
         if (structure == null || structure.getStructureJson() == null || structure.getStructureJson().isBlank()) {
-            return;
+            return new byte[0];
         }
         Map<String, Object> root = objectMapper.readValue(structure.getStructureJson(), new TypeReference<>() {
         });
         Object treeValue = root.get("file_tree");
         if (!(treeValue instanceof List<?> fileTree)) {
-            return;
+            return new byte[0];
         }
-        for (Object item : fileTree) {
-            if (!(item instanceof Map<?, ?> file)) {
-                continue;
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+             ZipOutputStream codeZip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            for (Object item : fileTree) {
+                if (!(item instanceof Map<?, ?> file)) {
+                    continue;
+                }
+                Object pathValue = file.get("path");
+                Object contentValue = file.get("content");
+                if (pathValue == null || contentValue == null) {
+                    continue;
+                }
+                String entryName = normalizeZipEntry(String.valueOf(pathValue));
+                if (entryName.isBlank()) {
+                    continue;
+                }
+                codeZip.putNextEntry(new ZipEntry(entryName));
+                codeZip.write(String.valueOf(contentValue).getBytes(StandardCharsets.UTF_8));
+                codeZip.closeEntry();
             }
-            Object pathValue = file.get("path");
-            Object contentValue = file.get("content");
-            if (pathValue == null || contentValue == null) {
-                continue;
-            }
-            String entryName = normalizeZipEntry(String.valueOf(pathValue));
-            if (entryName.isBlank()) {
-                continue;
-            }
-            zip.putNextEntry(new ZipEntry(baseName + "/代码/" + entryName));
-            zip.write(String.valueOf(contentValue).getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
+            codeZip.finish();
+            return output.toByteArray();
         }
     }
 
