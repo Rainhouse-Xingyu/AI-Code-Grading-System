@@ -20,6 +20,8 @@ import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TTeacherReviewMapper;
 import com.rainexis.backend.mapper.TUserMapper;
 import java.io.ByteArrayOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -148,11 +150,50 @@ public class PdfExportService {
     }
 
     private BaseFont chineseBaseFont() throws Exception {
+        for (String candidate : fontCandidates()) {
+            String normalized = normalizeFontCandidate(candidate);
+            if (normalized == null) {
+                continue;
+            }
+            try {
+                return BaseFont.createFont(normalized, BaseFont.IDENTITY_H, BaseFont.EMBEDDED);
+            } catch (Exception ignored) {
+                // Try the next known CJK font path.
+            }
+        }
         try {
             return BaseFont.createFont("STSong-Light", "UniGB-UCS2-H", BaseFont.NOT_EMBEDDED);
         } catch (Exception ex) {
             return BaseFont.createFont(BaseFont.HELVETICA, BaseFont.WINANSI, false);
         }
+    }
+
+    private List<String> fontCandidates() {
+        List<String> candidates = new ArrayList<>();
+        String configured = System.getenv("REPORT_PDF_FONT_PATH");
+        if (hasText(configured)) {
+            candidates.add(configured);
+        }
+        candidates.add("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc,0");
+        candidates.add("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc,0");
+        candidates.add("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc,0");
+        candidates.add("/usr/share/fonts/truetype/arphic/uming.ttc,0");
+        candidates.add("/System/Library/Fonts/STHeiti Light.ttc,0");
+        candidates.add("/System/Library/Fonts/STHeiti Medium.ttc,0");
+        candidates.add("/System/Library/Fonts/Supplemental/Songti.ttc,0");
+        candidates.add("/Library/Fonts/Arial Unicode.ttf");
+        candidates.add("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
+        return candidates;
+    }
+
+    private String normalizeFontCandidate(String candidate) {
+        String value = candidate.trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        int ttcIndex = value.lastIndexOf(',');
+        String pathValue = ttcIndex > 0 ? value.substring(0, ttcIndex) : value;
+        return Files.isRegularFile(Path.of(pathValue)) ? value : null;
     }
 
     private String finalScoreText(TAiReport report, TTeacherReview review) {

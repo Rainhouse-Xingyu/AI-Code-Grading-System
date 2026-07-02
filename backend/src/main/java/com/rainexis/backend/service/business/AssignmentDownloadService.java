@@ -4,17 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rainexis.backend.common.BusinessException;
-import com.rainexis.backend.entity.TAiReport;
 import com.rainexis.backend.entity.TAssignment;
 import com.rainexis.backend.entity.TProjectStructure;
 import com.rainexis.backend.entity.TSubmission;
-import com.rainexis.backend.entity.TTeacherReview;
 import com.rainexis.backend.entity.TUser;
-import com.rainexis.backend.mapper.TAiReportMapper;
 import com.rainexis.backend.mapper.TAssignmentMapper;
 import com.rainexis.backend.mapper.TProjectStructureMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
-import com.rainexis.backend.mapper.TTeacherReviewMapper;
 import com.rainexis.backend.mapper.TUserMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -35,24 +31,21 @@ public class AssignmentDownloadService {
     private final TAssignmentMapper assignmentMapper;
     private final TSubmissionMapper submissionMapper;
     private final TUserMapper userMapper;
-    private final TAiReportMapper reportMapper;
-    private final TTeacherReviewMapper reviewMapper;
     private final TProjectStructureMapper structureMapper;
+    private final PdfExportService pdfExportService;
     private final ObjectMapper objectMapper;
 
     public AssignmentDownloadService(TAssignmentMapper assignmentMapper,
                                      TSubmissionMapper submissionMapper,
                                      TUserMapper userMapper,
-                                     TAiReportMapper reportMapper,
-                                     TTeacherReviewMapper reviewMapper,
                                      TProjectStructureMapper structureMapper,
+                                     PdfExportService pdfExportService,
                                      ObjectMapper objectMapper) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
-        this.reportMapper = reportMapper;
-        this.reviewMapper = reviewMapper;
         this.structureMapper = structureMapper;
+        this.pdfExportService = pdfExportService;
         this.objectMapper = objectMapper;
     }
 
@@ -72,7 +65,7 @@ public class AssignmentDownloadService {
 
     public String reportFilename(Long submissionId) {
         TSubmission submission = requireSubmission(submissionId);
-        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + "-报告.md";
+        return studentBaseName(userMapper.selectById(submission.getStudentId()), submission) + "-报告.pdf";
     }
 
     public String codeFilename(Long submissionId) {
@@ -121,7 +114,7 @@ public class AssignmentDownloadService {
 
     public void writeSingleReport(Long submissionId, OutputStream output) {
         try {
-            output.write(reportMarkdown(requireSubmission(submissionId)).getBytes(StandardCharsets.UTF_8));
+            output.write(pdfExportService.exportSingle(submissionId).bytes());
         } catch (Exception ex) {
             throw new BusinessException(500, "报告下载失败: " + ex.getMessage());
         }
@@ -153,32 +146,15 @@ public class AssignmentDownloadService {
     }
 
     private void writeReportEntry(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
-        String markdown = reportMarkdown(submission);
-        zip.putNextEntry(new ZipEntry(baseName + "-报告.md"));
-        zip.write(markdown.getBytes(StandardCharsets.UTF_8));
+        zip.putNextEntry(new ZipEntry(baseName + "-报告.pdf"));
+        zip.write(pdfExportService.exportSingle(submission.getId()).bytes());
         zip.closeEntry();
     }
 
     private void writeCombinedReportEntry(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
-        String markdown = reportMarkdown(submission);
-        zip.putNextEntry(new ZipEntry(baseName + "/评分报告.md"));
-        zip.write(markdown.getBytes(StandardCharsets.UTF_8));
+        zip.putNextEntry(new ZipEntry(baseName + "/评分报告.pdf"));
+        zip.write(pdfExportService.exportSingle(submission.getId()).bytes());
         zip.closeEntry();
-    }
-
-    private String reportMarkdown(TSubmission submission) {
-        TTeacherReview review = reviewMapper.selectOne(new LambdaQueryWrapper<TTeacherReview>()
-                .eq(TTeacherReview::getSubmissionId, submission.getId())
-                .orderByDesc(TTeacherReview::getCreatedAt)
-                .last("limit 1"));
-        if (review != null && review.getModifiedMarkdown() != null && !review.getModifiedMarkdown().isBlank()) {
-            return review.getModifiedMarkdown();
-        }
-        TAiReport report = submission.getCurrentReportId() == null ? null : reportMapper.selectById(submission.getCurrentReportId());
-        if (report != null && report.getReportMarkdown() != null && !report.getReportMarkdown().isBlank()) {
-            return report.getReportMarkdown();
-        }
-        return "# 评分报告\n\n暂无评分报告。\n";
     }
 
     private void writeStudentCodeZipEntry(ZipOutputStream zip, String entryName, TSubmission submission) throws Exception {

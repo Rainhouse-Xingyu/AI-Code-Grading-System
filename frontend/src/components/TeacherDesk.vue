@@ -1787,7 +1787,7 @@ function downloadSubmission(submissionId) {
 
 function downloadReport(submissionId) {
   const row = submissions.value.find((item) => item.id === submissionId);
-  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download-report`, `${studentDownloadBase(row)}-报告.md`);
+  props.api.downloadGet(`/api/v1/submissions/${submissionId}/download-report`, `${studentDownloadBase(row)}-报告.pdf`);
 }
 
 async function downloadAllPackage() {

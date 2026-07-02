@@ -201,6 +201,14 @@ class EndToEndWorkflowTests {
                         .andReturn()))
                 .andExpect(status().isOk())
                 .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition")).contains("s001-Alice.zip"));
+        mockMvc.perform(asyncDispatch(mockMvc.perform(get("/api/v1/submissions/" + submissionId + "/download-report")
+                                .header("Authorization", bearer(teacherToken)))
+                .andExpect(request().asyncStarted())
+                        .andReturn()))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition"))
+                        .contains("s001-Alice-", ".pdf"))
+                .andExpect(result -> assertThat(result.getResponse().getContentAsByteArray()).startsWith("%PDF".getBytes(StandardCharsets.UTF_8)));
 
         mockMvc.perform(get("/api/v1/submissions")
                         .param("assignment_id", String.valueOf(assignmentId))
@@ -278,14 +286,24 @@ class EndToEndWorkflowTests {
                 .getContentAsByteArray();
         Set<String> packageEntries = zipEntryNames(allPackage);
         assertThat(packageEntries).contains(
-                "s001-Alice/评分报告.md",
+                "s001-Alice/评分报告.pdf",
                 "s001-Alice/s001-Alice.zip"
         );
-        assertThat(zipText(allPackage, "s001-Alice/评分报告.md")).contains("教师最终报告");
+        assertThat(zipEntries(allPackage).get("s001-Alice/评分报告.pdf")).startsWith("%PDF".getBytes(StandardCharsets.UTF_8));
         assertThat(zipEntryNames(zipEntries(allPackage).get("s001-Alice/s001-Alice.zip"))).contains(
                 "src/main/java/com/example/Main.java",
                 "src/main/java/com/example/util/Message.java"
         );
+        byte[] reportPackage = mockMvc.perform(asyncDispatch(mockMvc.perform(get("/api/v1/assignments/{id}/download-reports", assignmentId)
+                                .header("Authorization", bearer(teacherToken)))
+                        .andExpect(request().asyncStarted())
+                        .andReturn()))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsByteArray();
+        assertThat(zipEntryNames(reportPackage)).contains("s001-Alice-报告.pdf");
+        assertThat(zipEntries(reportPackage).get("s001-Alice-报告.pdf")).startsWith("%PDF".getBytes(StandardCharsets.UTF_8));
 
         Long studentId = userMapper.selectOne(new LambdaQueryWrapper<TUser>()
                 .eq(TUser::getUsername, "s001")
@@ -297,7 +315,7 @@ class EndToEndWorkflowTests {
                         .andReturn()))
                 .andExpect(status().isOk())
                 .andExpect(result -> assertThat(zipEntryNames(result.getResponse().getContentAsByteArray()))
-                        .contains("s001-Alice/评分报告.md", "s001-Alice/s001-Alice.zip"));
+                        .contains("s001-Alice/评分报告.pdf", "s001-Alice/s001-Alice.zip"));
 
         mockMvc.perform(post("/api/v1/grade-publish/push")
                         .header("Authorization", bearer(teacherToken))

@@ -199,7 +199,7 @@ public class SubmissionApiController {
                 .body(body);
     }
 
-    /** 教师单独下载某份提交的 Markdown 评分报告 */
+    /** 教师单独下载某份提交的 PDF 评分报告 */
     @GetMapping("/{submissionId}/download-report")
     public ResponseEntity<StreamingResponseBody> downloadReport(@PathVariable Long submissionId) {
         AuthContext.requireTeacher();
@@ -207,7 +207,7 @@ public class SubmissionApiController {
         String filename = assignmentDownloadService.reportFilename(submissionId);
         StreamingResponseBody body = output -> assignmentDownloadService.writeSingleReport(submissionId, output);
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/markdown; charset=UTF-8"))
+                .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(filename, StandardCharsets.UTF_8)
                         .build()
