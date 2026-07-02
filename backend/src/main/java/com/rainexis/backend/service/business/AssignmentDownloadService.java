@@ -1,14 +1,18 @@
 package com.rainexis.backend.service.business;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TAiReport;
 import com.rainexis.backend.entity.TAssignment;
+import com.rainexis.backend.entity.TProjectStructure;
 import com.rainexis.backend.entity.TSubmission;
 import com.rainexis.backend.entity.TTeacherReview;
 import com.rainexis.backend.entity.TUser;
 import com.rainexis.backend.mapper.TAiReportMapper;
 import com.rainexis.backend.mapper.TAssignmentMapper;
+import com.rainexis.backend.mapper.TProjectStructureMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TTeacherReviewMapper;
 import com.rainexis.backend.mapper.TUserMapper;
@@ -20,6 +24,7 @@ import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.util.zip.ZipInputStream;
@@ -32,17 +37,23 @@ public class AssignmentDownloadService {
     private final TUserMapper userMapper;
     private final TAiReportMapper reportMapper;
     private final TTeacherReviewMapper reviewMapper;
+    private final TProjectStructureMapper structureMapper;
+    private final ObjectMapper objectMapper;
 
     public AssignmentDownloadService(TAssignmentMapper assignmentMapper,
                                      TSubmissionMapper submissionMapper,
                                      TUserMapper userMapper,
                                      TAiReportMapper reportMapper,
-                                     TTeacherReviewMapper reviewMapper) {
+                                     TTeacherReviewMapper reviewMapper,
+                                     TProjectStructureMapper structureMapper,
+                                     ObjectMapper objectMapper) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
         this.reportMapper = reportMapper;
         this.reviewMapper = reviewMapper;
+        this.structureMapper = structureMapper;
+        this.objectMapper = objectMapper;
     }
 
     public String filename(Long assignmentId) {
@@ -184,8 +195,10 @@ public class AssignmentDownloadService {
     private void writeExpandedCodeEntries(ZipOutputStream zip, String baseName, TSubmission submission, byte[] buffer) throws Exception {
         Path source = Paths.get(submission.getFileUrl()).toAbsolutePath().normalize();
         if (!Files.isRegularFile(source)) {
+            writeCodeEntriesFromStructure(zip, baseName, submission);
             return;
         }
+        boolean wroteAny = false;
         try (ZipInputStream input = new ZipInputStream(Files.newInputStream(source), StandardCharsets.UTF_8)) {
             ZipEntry entry;
             while ((entry = input.getNextEntry()) != null) {
@@ -199,7 +212,43 @@ public class AssignmentDownloadService {
                     zip.write(buffer, 0, read);
                 }
                 zip.closeEntry();
+                wroteAny = true;
             }
+        }
+        if (!wroteAny) {
+            writeCodeEntriesFromStructure(zip, baseName, submission);
+        }
+    }
+
+    private void writeCodeEntriesFromStructure(ZipOutputStream zip, String baseName, TSubmission submission) throws Exception {
+        TProjectStructure structure = submission.getProjectStructureId() == null
+                ? null
+                : structureMapper.selectById(submission.getProjectStructureId());
+        if (structure == null || structure.getStructureJson() == null || structure.getStructureJson().isBlank()) {
+            return;
+        }
+        Map<String, Object> root = objectMapper.readValue(structure.getStructureJson(), new TypeReference<>() {
+        });
+        Object treeValue = root.get("file_tree");
+        if (!(treeValue instanceof List<?> fileTree)) {
+            return;
+        }
+        for (Object item : fileTree) {
+            if (!(item instanceof Map<?, ?> file)) {
+                continue;
+            }
+            Object pathValue = file.get("path");
+            Object contentValue = file.get("content");
+            if (pathValue == null || contentValue == null) {
+                continue;
+            }
+            String entryName = normalizeZipEntry(String.valueOf(pathValue));
+            if (entryName.isBlank()) {
+                continue;
+            }
+            zip.putNextEntry(new ZipEntry(baseName + "/代码/" + entryName));
+            zip.write(String.valueOf(contentValue).getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
         }
     }
 
