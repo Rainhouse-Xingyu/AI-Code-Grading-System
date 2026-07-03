@@ -1,9 +1,13 @@
 package com.rainexis.backend.service.business;
 
 import com.lowagie.text.Document;
+import com.lowagie.text.Element;
 import com.lowagie.text.Font;
 import com.lowagie.text.Paragraph;
+import com.lowagie.text.Phrase;
 import com.lowagie.text.pdf.BaseFont;
+import com.lowagie.text.pdf.PdfPCell;
+import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -19,10 +23,11 @@ import com.rainexis.backend.mapper.TAssignmentMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TTeacherReviewMapper;
 import com.rainexis.backend.mapper.TUserMapper;
+import java.awt.Color;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -106,7 +111,7 @@ public class PdfExportService {
         }
     }
 
-    /** 渲染PDF内容：学生信息、评分标准、已得分采分点和报告正文 */
+    /** 渲染PDF内容：学生信息、评分标准、得分明细和报告正文 */
     private byte[] renderPdf(String title, TSubmission submission, TUser student, TAiReport report, TTeacherReview review) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -135,13 +140,7 @@ public class PdfExportService {
             appendEarnedSection(document, font, review != null && hasText(review.getModifiedJson())
                     ? review.getModifiedJson()
                     : report == null ? null : report.getScoreDetailJson());
-            document.add(new Paragraph("请结合报告正文逐项检查自己的实现，重点核对采分点对应的代码是否完整、清晰、可运行。", font));
-            if (report != null) {
-                document.add(new Paragraph("报告正文：", font));
-                document.add(new Paragraph(nullToEmpty(review != null && hasText(review.getModifiedMarkdown())
-                        ? review.getModifiedMarkdown()
-                        : report.getReportMarkdown()), font));
-            }
+            document.add(new Paragraph("请结合得分明细逐项检查自己的实现，重点核对采分点对应的代码是否完整、清晰、可运行。", font));
             document.close();
             return out.toByteArray();
         } catch (Exception ex) {
@@ -237,28 +236,73 @@ public class PdfExportService {
         document.add(new Paragraph(" ", font));
     }
 
-    /** 追加已得分采分点，不展示未得分项 */
+    /** 追加得分明细，不展示未得分项 */
     private void appendEarnedSection(Document document, Font font, String json) throws Exception {
         if (json == null || json.isBlank()) {
             return;
         }
-        document.add(new Paragraph("已得分采分点：", font));
+        List<Map<String, Object>> rows;
         try {
-            List<Map<String, Object>> rows = objectMapper.readValue(json, new TypeReference<>() {
+            rows = objectMapper.readValue(json, new TypeReference<>() {
             });
-            for (Map<String, Object> row : rows) {
-                double score = number(row.get("score"));
-                if (score <= 0) {
-                    continue;
-                }
-                document.add(new Paragraph("- " + text(row.get("name"))
-                        + "：得分 " + row.get("score") + "/" + row.getOrDefault("max_score", row.getOrDefault("maxScore", 100))
-                        + "。" + text(row.getOrDefault("comment", "")), font));
-            }
         } catch (Exception ex) {
-            document.add(new Paragraph(json, font));
+            return;
         }
+        List<Map<String, Object>> earnedRows = rows.stream()
+                .filter(row -> number(row.get("score")) > 0)
+                .toList();
+        if (earnedRows.isEmpty()) {
+            return;
+        }
+        document.add(new Paragraph("得分明细：", font));
+        Font headerFont = new Font(font.getBaseFont(), 10, Font.BOLD);
+        Font bodyFont = new Font(font.getBaseFont(), 9);
+        PdfPTable table = new PdfPTable(4);
+        table.setWidthPercentage(100);
+        table.setWidths(new float[] {0.8f, 3.2f, 1.2f, 5.8f});
+        table.setSpacingBefore(6);
+        table.setSpacingAfter(10);
+        table.setSplitLate(false);
+        table.setSplitRows(true);
+        addHeaderCell(table, "序号", headerFont);
+        addHeaderCell(table, "得分点", headerFont);
+        addHeaderCell(table, "得分", headerFont);
+        addHeaderCell(table, "说明", headerFont);
+        int index = 1;
+        for (Map<String, Object> row : earnedRows) {
+            addBodyCell(table, String.valueOf(index++), bodyFont, Element.ALIGN_CENTER);
+            addBodyCell(table, text(row.get("name")), bodyFont, Element.ALIGN_LEFT);
+            addBodyCell(table, scoreText(row), bodyFont, Element.ALIGN_CENTER);
+            addBodyCell(table, text(row.getOrDefault("comment", "")), bodyFont, Element.ALIGN_LEFT);
+        }
+        document.add(table);
         document.add(new Paragraph(" ", font));
+    }
+
+    private void addHeaderCell(PdfPTable table, String text, Font font) {
+        PdfPCell cell = new PdfPCell(new Phrase(text, font));
+        cell.setHorizontalAlignment(Element.ALIGN_CENTER);
+        cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        cell.setBackgroundColor(new Color(230, 230, 230));
+        cell.setPadding(5);
+        table.addCell(cell);
+    }
+
+    private void addBodyCell(PdfPTable table, String text, Font font, int alignment) {
+        PdfPCell cell = new PdfPCell(new Phrase(text == null ? "" : text, font));
+        cell.setHorizontalAlignment(alignment);
+        cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        cell.setPadding(5);
+        table.addCell(cell);
+    }
+
+    private String scoreText(Map<String, Object> row) {
+        Object score = row.getOrDefault("score", "");
+        Object maxScore = row.getOrDefault("max_score", row.getOrDefault("maxScore", ""));
+        if (maxScore == null || String.valueOf(maxScore).isBlank()) {
+            return text(score);
+        }
+        return text(score) + "/" + text(maxScore);
     }
 
     private double number(Object value) {
