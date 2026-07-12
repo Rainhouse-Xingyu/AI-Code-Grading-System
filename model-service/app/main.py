@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import asyncio
+import time
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -279,15 +280,53 @@ async def score_with_openai_compatible(
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(chat_completions_url(base_url), headers=headers, json=body)
-        response.raise_for_status()
+    request_url = chat_completions_url(base_url)
+    provider_label = "DeepSeek" if base_url == DEEPSEEK_BASE_URL else "local model"
+    started_at = time.monotonic()
+    logger.info(
+        "%s request start task_id=%s submission_id=%s model=%s prompt_chars=%s timeout=%ss "
+        "max_completion_tokens=%s url=%s",
+        provider_label,
+        request.task_id,
+        request.submission_id,
+        model,
+        len(prompt),
+        timeout,
+        MAX_COMPLETION_TOKENS,
+        request_url,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(request_url, headers=headers, json=body)
+            response.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "%s request failed task_id=%s submission_id=%s elapsed=%.2fs error=%s",
+            provider_label,
+            request.task_id,
+            request.submission_id,
+            time.monotonic() - started_at,
+            exception_message(exc),
+        )
+        raise
     response_json = response.json()
+    usage = response_json.get("usage") or {}
+    logger.info(
+        "%s request succeeded task_id=%s submission_id=%s elapsed=%.2fs total_tokens=%s "
+        "prompt_tokens=%s completion_tokens=%s response_model=%s",
+        provider_label,
+        request.task_id,
+        request.submission_id,
+        time.monotonic() - started_at,
+        usage.get("total_tokens") if isinstance(usage, dict) else None,
+        usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+        usage.get("completion_tokens") if isinstance(usage, dict) else None,
+        response_json.get("model", model),
+    )
     content = model_content(response_json)
     result = parse_model_json(response_json)
     result = normalize_result(result, request.rubric_json)
     result["model_name"] = response_json.get("model", model)
-    usage = response_json.get("usage") or {}
     if isinstance(usage, dict) and usage.get("total_tokens") is not None:
         result["token_usage"] = usage["total_tokens"]
     try:

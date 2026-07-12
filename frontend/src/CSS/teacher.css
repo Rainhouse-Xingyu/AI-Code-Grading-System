@@ -134,6 +134,29 @@
   width: 140px;
 }
 
+.submissions-module-panel,
+.submissions-card {
+  min-height: 0;
+}
+
+.submissions-card {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 188px);
+  min-height: 520px;
+}
+
+.submissions-card .el-card__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.submissions-table {
+  flex: 1;
+  min-height: 0;
+}
+
 .upload-progress,
 .upload-progress-stack {
   margin-top: 12px;

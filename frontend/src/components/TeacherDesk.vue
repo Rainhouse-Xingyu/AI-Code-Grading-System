@@ -98,8 +98,8 @@
           @remove-template-item="removeRubricTemplateItem"
         />
 
-        <section v-show="activeTeacherModule === 'submissions'" class="teacher-module-panel">
-      <el-card shadow="never">
+        <section v-show="activeTeacherModule === 'submissions'" class="teacher-module-panel submissions-module-panel">
+      <el-card shadow="never" class="submissions-card">
         <template #header>
           <div class="card-head">
             <span>提交记录</span>
@@ -135,8 +135,9 @@
           </div>
         </template>
         <el-table
+          class="submissions-table"
           :data="submissions"
-          height="280"
+          height="100%"
           row-key="id"
           highlight-current-row
           @current-change="selectSubmission"
