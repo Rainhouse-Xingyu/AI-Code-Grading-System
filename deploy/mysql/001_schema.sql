@@ -244,4 +244,16 @@ CREATE TABLE IF NOT EXISTS `t_grade_publish` (
   KEY `idx_grade_publish_student` (`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+INSERT INTO `t_user`
+  (`username`, `password`, `role`, `real_name`, `need_password_change`, `login_fail_count`, `token_version`)
+VALUES
+  ('admin', '$2a$10$uL6.NfU18h7tij7fjBfdrOHo9UpksmkfdkotLObczLNJo3dPNomEq', 'admin', '系统管理员', 0, 0, 0)
+ON DUPLICATE KEY UPDATE
+  `password` = VALUES(`password`),
+  `role` = 'admin',
+  `real_name` = VALUES(`real_name`),
+  `need_password_change` = 0,
+  `login_fail_count` = 0,
+  `locked_until` = NULL;
+
 SET FOREIGN_KEY_CHECKS = 1;

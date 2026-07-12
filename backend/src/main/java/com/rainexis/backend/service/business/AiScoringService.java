@@ -234,6 +234,10 @@ public class AiScoringService {
             if (structure == null) {
                 throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
             }
+            if (queueEnabled()) {
+                pushQueue(task, submission, structure, rubric, jointReview ? previousReportMarkdown(submission) : "");
+                return taskMapper.selectById(task.getId());
+            }
             logProgress(task, "构建评分 Prompt 并调用模型");
             Map<String, Object> result = scoreWithFallback(
                     structure.getStructureJson(),
@@ -1173,6 +1177,10 @@ public class AiScoringService {
 
     private boolean enableRemote() {
         return runtimeConfigService.getBoolean("AI_ENABLE_REMOTE", enableRemote);
+    }
+
+    private boolean queueEnabled() {
+        return runtimeConfigService.getBoolean("AI_QUEUE_ENABLED", queueEnabled);
     }
 
     private boolean dispatcherEnabled() {

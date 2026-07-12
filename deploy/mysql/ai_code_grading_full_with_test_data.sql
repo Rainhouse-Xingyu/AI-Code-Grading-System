@@ -3,6 +3,7 @@
 --   mysql -uroot -p < deploy/mysql/ai_code_grading_full_with_test_data.sql
 --
 -- Test passwords:
+--   Admin: admin / 12345
 --   Teachers: Pass12345
 --   Students: Stu123456 (legacy demo rows do not include encrypted ID card values)
 
@@ -274,11 +275,13 @@ CREATE TABLE `t_grade_publish` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- Seed users.
+-- Default admin uses password 12345.
 -- Teachers all use password Pass12345.
 -- Legacy demo students all use password Stu123456 and need_password_change=1.
 INSERT INTO `t_user`
   (`id`, `username`, `password`, `role`, `real_name`, `email`, `phone`, `class_name`, `need_password_change`, `login_fail_count`, `token_version`)
 VALUES
+  (900, 'admin', '$2a$10$uL6.NfU18h7tij7fjBfdrOHo9UpksmkfdkotLObczLNJo3dPNomEq', 'admin', '系统管理员', 'admin@example.edu.cn', NULL, NULL, 0, 0, 0),
   (1, 't001', '$2a$10$xSYVE49Y4gN1mOz78.S5eu8/3PKukc8X0ENl4pknELDW9AqjPdbQW', 'teacher', '王老师', 't001@example.edu.cn', '13800000001', 'CS-1', 0, 0, 0),
   (2, 't002', '$2a$10$xSYVE49Y4gN1mOz78.S5eu8/3PKukc8X0ENl4pknELDW9AqjPdbQW', 'teacher', '李老师', 't002@example.edu.cn', '13800000002', 'CS-2', 0, 0, 0),
   (3, 't003', '$2a$10$xSYVE49Y4gN1mOz78.S5eu8/3PKukc8X0ENl4pknELDW9AqjPdbQW', 'teacher', '赵老师', 't003@example.edu.cn', '13800000003', 'AI-1', 0, 0, 0),
