@@ -135,6 +135,7 @@
           </div>
         </template>
         <el-table
+          ref="scoringTable"
           class="submissions-table"
           :data="submissions"
           height="100%"
@@ -143,7 +144,7 @@
           @current-change="selectSubmission"
           @selection-change="selectScoringRows"
         >
-          <el-table-column type="selection" width="44" reserve-selection />
+          <el-table-column type="selection" width="44" />
           <el-table-column prop="studentUsername" label="学号" width="100" />
           <el-table-column prop="studentRealName" label="姓名" width="90" />
           <el-table-column prop="fileName" label="文件" min-width="150" />
@@ -298,12 +299,13 @@
           />
         </template>
         <el-table
+          ref="downloadTable"
           :data="submissions"
           height="360"
           row-key="id"
           @selection-change="selectDownloadRows"
         >
-          <el-table-column type="selection" width="44" reserve-selection />
+          <el-table-column type="selection" width="44" />
           <el-table-column prop="studentUsername" label="学号" width="120" />
           <el-table-column prop="studentRealName" label="姓名" width="110" />
           <el-table-column prop="fileName" label="文件" min-width="170" show-overflow-tooltip />
@@ -634,7 +636,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { messageOf } from "../JS/api.js";
 import { renderMarkdown } from "../JS/markdown.js";
@@ -661,6 +663,8 @@ const activeTeacherModule = computed(() => props.activeModule || "assignments");
 const studentUploadProgress = ref(0);
 const cleanupOlderThanDays = ref(180);
 const cleanupPreview = ref(null);
+const scoringTable = ref(null);
+const downloadTable = ref(null);
 const scoringSelection = ref([]);
 const downloadSelection = ref([]);
 const scoringPreviewVisible = ref(false);
@@ -675,6 +679,7 @@ const scoringPolling = ref(false);
 const packageDownloading = ref(false);
 const packageDownloadProgress = ref(0);
 let scoringPollTimer = null;
+let syncingSubmissionSelection = false;
 const tokenQuota = ref(null);
 const tokenStats = ref(null);
 const templateSaving = ref(false);
@@ -853,6 +858,7 @@ async function refreshSubmissions() {
     submissions.value = nextSubmissions;
     scoringSelection.value = keepRowsById(scoringSelection.value, nextSubmissions);
     downloadSelection.value = keepRowsById(downloadSelection.value, nextSubmissions);
+    await syncSubmissionTableSelections();
     tasks.value = nextTasks;
     assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
@@ -1274,16 +1280,36 @@ function reviewRowClassName({ row }) {
 }
 
 function selectScoringRows(rows) {
+  if (syncingSubmissionSelection) return;
   scoringSelection.value = rows;
 }
 
 function selectDownloadRows(rows) {
+  if (syncingSubmissionSelection) return;
   downloadSelection.value = rows;
 }
 
 function keepRowsById(selectedRows, nextRows) {
   const selectedIds = new Set(selectedRows.map((row) => String(row.id)));
   return nextRows.filter((row) => selectedIds.has(String(row.id)));
+}
+
+async function syncSubmissionTableSelections() {
+  await nextTick();
+  syncingSubmissionSelection = true;
+  try {
+    syncTableSelection(scoringTable.value, scoringSelection.value);
+    syncTableSelection(downloadTable.value, downloadSelection.value);
+    await nextTick();
+  } finally {
+    syncingSubmissionSelection = false;
+  }
+}
+
+function syncTableSelection(table, selectedRows) {
+  if (!table) return;
+  table.clearSelection();
+  selectedRows.forEach((row) => table.toggleRowSelection(row, true));
 }
 
 async function selectStudentFile(uploadFile) {
@@ -1551,6 +1577,9 @@ async function checkScoringProgress() {
     ]);
     tasks.value = nextTasks;
     submissions.value = nextSubmissions;
+    scoringSelection.value = keepRowsById(scoringSelection.value, nextSubmissions);
+    downloadSelection.value = keepRowsById(downloadSelection.value, nextSubmissions);
+    await syncSubmissionTableSelections();
     assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
     refreshTokenQuota();
