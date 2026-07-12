@@ -137,11 +137,12 @@
         <el-table
           :data="submissions"
           height="280"
+          row-key="id"
           highlight-current-row
           @current-change="selectSubmission"
           @selection-change="selectScoringRows"
         >
-          <el-table-column type="selection" width="44" />
+          <el-table-column type="selection" width="44" reserve-selection />
           <el-table-column prop="studentUsername" label="学号" width="100" />
           <el-table-column prop="studentRealName" label="姓名" width="90" />
           <el-table-column prop="fileName" label="文件" min-width="150" />
@@ -298,9 +299,10 @@
         <el-table
           :data="submissions"
           height="360"
+          row-key="id"
           @selection-change="selectDownloadRows"
         >
-          <el-table-column type="selection" width="44" />
+          <el-table-column type="selection" width="44" reserve-selection />
           <el-table-column prop="studentUsername" label="学号" width="120" />
           <el-table-column prop="studentRealName" label="姓名" width="110" />
           <el-table-column prop="fileName" label="文件" min-width="170" show-overflow-tooltip />
@@ -816,6 +818,8 @@ onUnmounted(() => stopScoringPolling());
 
 watch(selectedAssignment, () => {
   selectedSubmission.value = null;
+  scoringSelection.value = [];
+  downloadSelection.value = [];
   report.value = null;
   reportMarkdown.value = "";
   refreshSubmissions();
@@ -846,8 +850,8 @@ async function refreshSubmissions() {
       props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);
     submissions.value = nextSubmissions;
-    scoringSelection.value = [];
-    downloadSelection.value = [];
+    scoringSelection.value = keepRowsById(scoringSelection.value, nextSubmissions);
+    downloadSelection.value = keepRowsById(downloadSelection.value, nextSubmissions);
     tasks.value = nextTasks;
     assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
@@ -1274,6 +1278,11 @@ function selectScoringRows(rows) {
 
 function selectDownloadRows(rows) {
   downloadSelection.value = rows;
+}
+
+function keepRowsById(selectedRows, nextRows) {
+  const selectedIds = new Set(selectedRows.map((row) => String(row.id)));
+  return nextRows.filter((row) => selectedIds.has(String(row.id)));
 }
 
 async function selectStudentFile(uploadFile) {
