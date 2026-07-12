@@ -80,6 +80,7 @@ public class AiScoringService {
     private final boolean enableRemote;
     private final boolean queueEnabled;
     private final boolean dispatcherEnabled;
+    private final RuntimeConfigService runtimeConfigService;
 
     public AiScoringService(TAiTaskMapper taskMapper,
                             TAiLogMapper logMapper,
@@ -103,7 +104,8 @@ public class AiScoringService {
                             @Value("${app.ai.max-completion-tokens}") int maxCompletionTokens,
                             @Value("${app.ai.enable-remote}") boolean enableRemote,
                             @Value("${app.ai.queue-enabled}") boolean queueEnabled,
-                            @Value("${app.ai.dispatcher-enabled}") boolean dispatcherEnabled) {
+                            @Value("${app.ai.dispatcher-enabled}") boolean dispatcherEnabled,
+                            RuntimeConfigService runtimeConfigService) {
         this.taskMapper = taskMapper;
         this.logMapper = logMapper;
         this.reportMapper = reportMapper;
@@ -127,6 +129,7 @@ public class AiScoringService {
         this.enableRemote = enableRemote;
         this.queueEnabled = queueEnabled;
         this.dispatcherEnabled = dispatcherEnabled;
+        this.runtimeConfigService = runtimeConfigService;
         this.webClient = WebClient.builder().baseUrl(deepSeekBaseUrl).build();
     }
 
@@ -159,17 +162,17 @@ public class AiScoringService {
             task.setAssignmentId(assignmentId);
             task.setSubmissionId(submissionId);
             task.setBatchId(batchId);
-            task.setModelName(model);
+            task.setModelName(aiModel());
             task.setStatus("pending");
             task.setPromptTokens(0);
             task.setCompletionTokens(0);
             task.setTotalTokens(0);
             task.setRetryCount(0);
             taskMapper.insert(task);
-            log(task, "INFO", dispatcherEnabled ? "AI 评分任务已创建，等待后台调度" : "AI 评分任务已创建", task.getModelName(), 0);
+            log(task, "INFO", dispatcherEnabled() ? "AI 评分任务已创建，等待后台调度" : "AI 评分任务已创建", task.getModelName(), 0);
             submission.setStatus("scoring");
             submissionMapper.updateById(submission);
-            if (!dispatcherEnabled) {
+            if (!dispatcherEnabled()) {
                 processTask(task.getId(), jointReview);
             }
             tasks.add(taskMapper.selectById(task.getId()));
@@ -202,7 +205,7 @@ public class AiScoringService {
             submission.setStatus("scoring");
             submissionMapper.updateById(submission);
         }
-        return dispatcherEnabled ? taskMapper.selectById(taskId) : processTask(taskId);
+        return dispatcherEnabled() ? taskMapper.selectById(taskId) : processTask(taskId);
     }
 
     /** 同步执行单个AI评分任务：获取代码结构+评分标准 → 调AI → 保存报告 */
@@ -356,12 +359,18 @@ public class AiScoringService {
     }
 
     private Map<String, Object> scoreWithFallback(String structureJson, String rubricJson, String previousReportMarkdown) throws Exception {
-        if ("local".equalsIgnoreCase(provider)) {
-            if (localBaseUrl != null && !localBaseUrl.isBlank()) {
+        String activeProvider = aiProvider();
+        String activeLocalBaseUrl = localBaseUrl();
+        String activeLocalApiKey = localApiKey();
+        String activeLocalModel = localModel();
+        String activeDeepSeekApiKey = deepSeekApiKey();
+        String activeModel = aiModel();
+        if ("local".equalsIgnoreCase(activeProvider)) {
+            if (activeLocalBaseUrl != null && !activeLocalBaseUrl.isBlank()) {
                 try {
-                    Map<String, Object> local = callOpenAiCompatible(localBaseUrl, localApiKey, localModel, localTimeoutSeconds,
+                    Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
                             structureJson, rubricJson, previousReportMarkdown);
-                    local.putIfAbsent("model_name", localModel);
+                    local.putIfAbsent("model_name", activeLocalModel);
                     validateResult(local, rubricJson);
                     return local;
                 } catch (Exception localEx) {
@@ -374,23 +383,23 @@ public class AiScoringService {
             fallback.put("fallback_reason", "local provider selected but LOCAL_AI_BASE_URL is empty");
             return fallback;
         }
-        if (enableRemote && deepSeekApiKey != null && !deepSeekApiKey.isBlank()) {
+        if (enableRemote() && activeDeepSeekApiKey != null && !activeDeepSeekApiKey.isBlank()) {
             Exception last = null;
             for (int i = 0; i < 3; i++) {
                 try {
                     Map<String, Object> remote = callDeepSeek(structureJson, rubricJson, previousReportMarkdown);
-                    remote.put("model_name", model);
+                    remote.put("model_name", activeModel);
                     validateResult(remote, rubricJson);
                     return remote;
                 } catch (Exception ex) {
                     last = ex;
                 }
             }
-            if (localBaseUrl != null && !localBaseUrl.isBlank()) {
+            if (activeLocalBaseUrl != null && !activeLocalBaseUrl.isBlank()) {
                 try {
-                    Map<String, Object> local = callOpenAiCompatible(localBaseUrl, localApiKey, localModel, localTimeoutSeconds,
+                    Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
                             structureJson, rubricJson, previousReportMarkdown);
-                    local.putIfAbsent("model_name", localModel);
+                    local.putIfAbsent("model_name", activeLocalModel);
                     local.put("fallback_reason", last == null ? "remote failed" : last.getMessage());
                     validateResult(local, rubricJson);
                     return local;
@@ -408,7 +417,15 @@ public class AiScoringService {
                     + "; local model not configured");
             return fallback;
         }
-        return localFallback(structureJson, rubricJson);
+        Map<String, Object> fallback = localFallback(structureJson, rubricJson);
+        if (!enableRemote()) {
+            fallback.put("fallback_reason", "remote model disabled by AI_ENABLE_REMOTE=false");
+        } else if (activeDeepSeekApiKey == null || activeDeepSeekApiKey.isBlank()) {
+            fallback.put("fallback_reason", "DEEPSEEK_API_KEY is empty");
+        } else {
+            fallback.put("fallback_reason", "remote provider not available");
+        }
+        return fallback;
     }
 
     /** 调用 DeepSeek API 进行评分 */
@@ -417,7 +434,7 @@ public class AiScoringService {
     }
 
     private Map<String, Object> callDeepSeek(String structureJson, String rubricJson, String previousReportMarkdown) throws Exception {
-        return callOpenAiCompatible(deepSeekBaseUrl, deepSeekApiKey, model, deepSeekTimeoutSeconds,
+        return callOpenAiCompatible(deepSeekBaseUrl(), deepSeekApiKey(), aiModel(), deepSeekTimeoutSeconds(),
                 structureJson, rubricJson, previousReportMarkdown);
     }
 
@@ -439,16 +456,15 @@ public class AiScoringService {
                                                      String rubricJson,
                                                      String previousReportMarkdown) throws Exception {
         String prompt = buildPrompt(structureJson, rubricJson, previousReportMarkdown);
-        Map<String, Object> request = Map.of(
-                "model", requestModel,
-                "messages", List.of(
-                        Map.of("role", "system", "content", "你是一名严格但公正的编程课程助教，只返回 JSON。"),
-                        Map.of("role", "user", "content", prompt)
-                ),
-                "temperature", 0.2,
-                "max_completion_tokens", maxCompletionTokens,
-                "response_format", Map.of("type", "json_object")
-        );
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("model", requestModel);
+        request.put("messages", List.of(
+                Map.of("role", "system", "content", "你是一名严格但公正的编程课程助教，只返回 JSON。"),
+                Map.of("role", "user", "content", prompt)
+        ));
+        request.put("temperature", 0.2);
+        request.put("max_tokens", maxCompletionTokens());
+        request.put("response_format", Map.of("type", "json_object"));
         WebClient.RequestBodySpec spec = webClient.post()
                 .uri(chatCompletionsUrl(baseUrl));
         if (apiKey != null && !apiKey.isBlank()) {
@@ -868,11 +884,11 @@ public class AiScoringService {
             if (hasText(previousReportMarkdown)) {
                 payload.put("previous_report_markdown", previousReportMarkdown);
             }
-            redisTemplate.opsForList().leftPush(redisQueue, objectMapper.writeValueAsString(payload));
+            redisTemplate.opsForList().leftPush(redisQueue(), objectMapper.writeValueAsString(payload));
             task.setStatus("running");
             task.setStartTime(LocalDateTime.now());
             taskMapper.updateById(task);
-            log(task, "INFO", "AI 评分任务已写入 Redis 队列 " + redisQueue, task.getModelName(), 0);
+            log(task, "INFO", "AI 评分任务已写入 Redis 队列 " + redisQueue(), task.getModelName(), 0);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -1111,6 +1127,58 @@ public class AiScoringService {
         return Math.max(1, chars / 4);
     }
 
+    private String redisQueue() {
+        return runtimeConfigService.get("AI_REDIS_QUEUE", redisQueue);
+    }
+
+    private String deepSeekApiKey() {
+        return runtimeConfigService.get("DEEPSEEK_API_KEY", deepSeekApiKey);
+    }
+
+    private String deepSeekBaseUrl() {
+        return runtimeConfigService.get("DEEPSEEK_BASE_URL", deepSeekBaseUrl);
+    }
+
+    private String localBaseUrl() {
+        return runtimeConfigService.get("LOCAL_AI_BASE_URL", localBaseUrl);
+    }
+
+    private String localApiKey() {
+        return runtimeConfigService.get("LOCAL_AI_API_KEY", localApiKey);
+    }
+
+    private String localModel() {
+        return runtimeConfigService.get("LOCAL_AI_MODEL", localModel);
+    }
+
+    private String aiModel() {
+        return runtimeConfigService.get("AI_MODEL", model);
+    }
+
+    private String aiProvider() {
+        return runtimeConfigService.get("AI_PROVIDER", provider == null ? "deepseek" : provider);
+    }
+
+    private int deepSeekTimeoutSeconds() {
+        return runtimeConfigService.getInt("DEEPSEEK_TIMEOUT_SECONDS", deepSeekTimeoutSeconds);
+    }
+
+    private int localTimeoutSeconds() {
+        return runtimeConfigService.getInt("LOCAL_AI_TIMEOUT_SECONDS", localTimeoutSeconds);
+    }
+
+    private int maxCompletionTokens() {
+        return runtimeConfigService.getInt("AI_MAX_COMPLETION_TOKENS", maxCompletionTokens);
+    }
+
+    private boolean enableRemote() {
+        return runtimeConfigService.getBoolean("AI_ENABLE_REMOTE", enableRemote);
+    }
+
+    private boolean dispatcherEnabled() {
+        return runtimeConfigService.getBoolean("AI_DISPATCHER_ENABLED", dispatcherEnabled);
+    }
+
     /** 写入AI评分日志到 t_ai_log 表 */
     private void log(TAiTask task, String level, String message, String modelName, long durationMs) {
         TAiLog log = new TAiLog();
@@ -1125,11 +1193,11 @@ public class AiScoringService {
     }
 
     public void logTask(TAiTask task, String level, String message, long durationMs) {
-        log(task, level, message, task == null ? model : task.getModelName(), durationMs);
+        log(task, level, message, task == null ? aiModel() : task.getModelName(), durationMs);
     }
 
     private void logProgress(TAiTask task, String message) {
-        if (dispatcherEnabled) {
+        if (dispatcherEnabled()) {
             log(task, "INFO", message, task.getModelName(), durationMs(task));
         }
     }

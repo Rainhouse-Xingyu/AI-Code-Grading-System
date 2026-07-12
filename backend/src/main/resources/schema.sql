@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS t_user (
   email VARCHAR(100),
   phone VARCHAR(30),
   class_name VARCHAR(500),
+  id_card_encrypted VARCHAR(512),
+  employee_no VARCHAR(50),
+  college VARCHAR(100),
+  teaching_course VARCHAR(200),
+  teaching_class VARCHAR(500),
   need_password_change TINYINT DEFAULT 0,
   login_fail_count INT DEFAULT 0,
   locked_until TIMESTAMP,
@@ -18,10 +23,11 @@ CREATE TABLE IF NOT EXISTS t_user (
 CREATE TABLE IF NOT EXISTS t_assignment (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   title VARCHAR(100) NOT NULL,
+  course_name VARCHAR(100),
   description LONGTEXT,
   teacher_id BIGINT NOT NULL,
   language VARCHAR(50),
-  class_name VARCHAR(50),
+  class_name VARCHAR(500),
   start_time TIMESTAMP,
   end_time TIMESTAMP,
   late_policy VARCHAR(20) DEFAULT 'forbid',
@@ -37,7 +43,8 @@ CREATE TABLE IF NOT EXISTS t_assignment_class (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   assignment_id BIGINT NOT NULL,
   class_name VARCHAR(50) NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (assignment_id, class_name)
 );
 
 CREATE TABLE IF NOT EXISTS t_file (

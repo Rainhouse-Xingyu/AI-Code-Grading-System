@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import io.swagger.annotations.ApiModel;
@@ -35,8 +36,8 @@ public class TUser implements Serializable {
     @TableField("password")
     private String password;
 
-    /** 角色：student（学生）/ teacher（教师） */
-    @ApiModelProperty("student / teacher")
+    /** 角色：student（学生）/ teacher（教师）/ admin（管理员） */
+    @ApiModelProperty("student / teacher / admin")
     @TableField("role")
     private String role;
 
@@ -55,6 +56,27 @@ public class TUser implements Serializable {
     /** 所属班级 */
     @TableField("class_name")
     private String className;
+
+    /** 加密后的身份证号，仅用于生成学生初始/重置密码 */
+    @JsonIgnore
+    @TableField("id_card_encrypted")
+    private String idCardEncrypted;
+
+    /** 教职工号 */
+    @TableField("employee_no")
+    private String employeeNo;
+
+    /** 所属学院 */
+    @TableField("college")
+    private String college;
+
+    /** 教授课程 */
+    @TableField("teaching_course")
+    private String teachingCourse;
+
+    /** 教授班级 */
+    @TableField("teaching_class")
+    private String teachingClass;
 
     /** 是否需要修改初始密码（首次登录强制修改） */
     @ApiModelProperty("是否需要修改初始密码")

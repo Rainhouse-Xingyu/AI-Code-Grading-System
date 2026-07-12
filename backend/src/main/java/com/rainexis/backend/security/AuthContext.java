@@ -36,7 +36,7 @@ public final class AuthContext {
     }
 
     public static void requireAdmin() {
-        if (!"admin".equals(get().role())) {
+        if (!get().isAdmin()) {
             throw BusinessException.forbidden("仅管理员可操作");
         }
     }

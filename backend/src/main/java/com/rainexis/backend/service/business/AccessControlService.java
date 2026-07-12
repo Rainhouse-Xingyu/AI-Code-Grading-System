@@ -53,7 +53,7 @@ public class AccessControlService {
             throw BusinessException.notFound("作业不存在");
         }
         AuthUser current = AuthContext.get();
-        if (!"admin".equals(current.role()) && !assignmentClassService.includesClass(assignment, current.className())) {
+        if (!current.isAdmin() && !assignmentClassService.includesClass(assignment, current.className())) {
             throw BusinessException.forbidden("只能访问本班作业");
         }
         assignmentClassService.attachClassNames(assignment);
@@ -98,7 +98,7 @@ public class AccessControlService {
             return false;
         }
         AuthUser current = AuthContext.get();
-        if ("admin".equals(current.role())) {
+        if (current.isAdmin()) {
             return true;
         }
         TAssignment assignment = assignmentMapper.selectById(submission.getAssignmentId());
@@ -127,7 +127,7 @@ public class AccessControlService {
             throw BusinessException.notFound("学生不存在");
         }
         AuthUser current = AuthContext.get();
-        if (!"admin".equals(current.role()) && !sameClass(current.className(), student.getClassName())) {
+        if (!current.isAdmin() && !sameClass(current.className(), student.getClassName())) {
             throw BusinessException.forbidden("只能管理自己班级的学生");
         }
         return student;
@@ -135,7 +135,7 @@ public class AccessControlService {
 
     public boolean canReadAssignmentStats(AuthUser current, TAssignment assignment) {
         return assignment != null
-                && ("admin".equals(current.role()) || assignmentClassService.includesClass(assignment, current.className()));
+                && (current.isAdmin() || assignmentClassService.includesClass(assignment, current.className()));
     }
 
     public boolean sameClass(String expected, String actual) {

@@ -9,6 +9,7 @@ import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.security.JwtService;
 import com.rainexis.backend.security.PasswordService;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -50,6 +51,7 @@ public class AuthApiController {
         user.setRealName(request.realName());
         user.setEmail(request.email());
         user.setClassName(request.className());
+        user.setTeachingClass(request.className());
         user.setNeedPasswordChange(false);
         user.setLoginFailCount(0);
         user.setTokenVersion(0);
@@ -93,7 +95,7 @@ public class AuthApiController {
         if (raw == null || stored == null) {
             return false;
         }
-        return passwordService.matches(raw, stored) || raw.equals(stored);
+        return passwordService.matches(raw, stored);
     }
 
     private void recordLoginFailure(TUser user) {
@@ -118,18 +120,22 @@ public class AuthApiController {
 
     private Map<String, Object> userPayload(TUser user) {
         TUser teacher = teacherForStudent(user);
-        return Map.of(
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "role", user.getRole(),
-                "realName", user.getRealName() == null ? "" : user.getRealName(),
-                "email", user.getEmail() == null ? "" : user.getEmail(),
-                "phone", user.getPhone() == null ? "" : user.getPhone(),
-                "className", user.getClassName() == null ? "" : user.getClassName(),
-                "teacherUsername", teacher == null ? "" : teacher.getUsername(),
-                "teacherRealName", teacher == null ? "" : teacher.getRealName(),
-                "needPasswordChange", Boolean.TRUE.equals(user.getNeedPasswordChange())
-        );
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", user.getId());
+        payload.put("username", user.getUsername());
+        payload.put("role", user.getRole());
+        payload.put("realName", user.getRealName() == null ? "" : user.getRealName());
+        payload.put("email", user.getEmail() == null ? "" : user.getEmail());
+        payload.put("phone", user.getPhone() == null ? "" : user.getPhone());
+        payload.put("className", user.getClassName() == null ? "" : user.getClassName());
+        payload.put("employeeNo", user.getEmployeeNo() == null ? "" : user.getEmployeeNo());
+        payload.put("college", user.getCollege() == null ? "" : user.getCollege());
+        payload.put("teachingCourse", user.getTeachingCourse() == null ? "" : user.getTeachingCourse());
+        payload.put("teachingClass", user.getTeachingClass() == null ? "" : user.getTeachingClass());
+        payload.put("teacherUsername", teacher == null ? "" : teacher.getUsername());
+        payload.put("teacherRealName", teacher == null ? "" : teacher.getRealName());
+        payload.put("needPasswordChange", Boolean.TRUE.equals(user.getNeedPasswordChange()));
+        return payload;
     }
 
     /** 查找学生所属班级的教师（用于前端显示） */

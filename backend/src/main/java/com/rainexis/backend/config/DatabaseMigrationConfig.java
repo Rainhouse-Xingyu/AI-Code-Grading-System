@@ -29,8 +29,10 @@ public class DatabaseMigrationConfig {
                 """);
         createRubricTemplateTables();
         widenAssignmentClassName();
+        ensureUserColumns();
         ensureAssignmentRubricColumns();
         ensureAiTaskColumns();
+        removeLegacySuperAdmin();
         jdbcTemplate.update("""
                 INSERT INTO t_assignment_class (assignment_id, class_name)
                 SELECT a.id, a.class_name
@@ -47,6 +49,7 @@ public class DatabaseMigrationConfig {
     }
 
     private void ensureAssignmentRubricColumns() {
+        addColumnIfMissing("t_assignment", "course_name", "VARCHAR(100)");
         addColumnIfMissing("t_assignment", "rubric_template_id", "BIGINT");
         addColumnIfMissing("t_assignment", "selected_rubric_item_ids", "LONGTEXT");
         addColumnIfMissing("t_assignment", "normalized_rubric_json", "LONGTEXT");
@@ -54,6 +57,27 @@ public class DatabaseMigrationConfig {
 
     private void ensureAiTaskColumns() {
         addColumnIfMissing("t_ai_task", "batch_id", "VARCHAR(64)");
+    }
+
+    private void ensureUserColumns() {
+        addColumnIfMissing("t_user", "id_card_encrypted", "VARCHAR(512)");
+        addColumnIfMissing("t_user", "employee_no", "VARCHAR(50)");
+        addColumnIfMissing("t_user", "college", "VARCHAR(100)");
+        addColumnIfMissing("t_user", "teaching_course", "VARCHAR(200)");
+        addColumnIfMissing("t_user", "teaching_class", "VARCHAR(500)");
+    }
+
+    private void removeLegacySuperAdmin() {
+        int converted = jdbcTemplate.update("""
+                UPDATE t_user
+                SET role = 'admin'
+                WHERE role = 'super_admin'
+                  AND username <> 'superadmin'
+                """);
+        int deleted = jdbcTemplate.update("DELETE FROM t_user WHERE username = ?", "superadmin");
+        if (converted > 0 || deleted > 0) {
+            log.info("Removed legacy super-admin role: converted={}, deleted={}", converted, deleted);
+        }
     }
 
     private void createRubricTemplateTables() {

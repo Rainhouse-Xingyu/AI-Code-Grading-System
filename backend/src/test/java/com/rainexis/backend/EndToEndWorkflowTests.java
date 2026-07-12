@@ -3,6 +3,7 @@ package com.rainexis.backend;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rainexis.backend.config.DatabaseMigrationConfig;
 import com.rainexis.backend.entity.TAiReport;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TFile;
@@ -53,6 +54,7 @@ import org.springframework.web.context.WebApplicationContext;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -72,7 +74,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.storage.root=${java.io.tmpdir}/ai-code-grading-test-uploads",
         "app.upload-dir=${java.io.tmpdir}/ai-code-grading-test-uploads",
         "app.ai.enable-remote=false",
-        "app.ai.dispatcher-enabled=false"
+        "app.ai.dispatcher-enabled=false",
+        "APP_ENV_FILE=${java.io.tmpdir}/ai-code-grading-test-empty.env"
 })
 class EndToEndWorkflowTests {
     @Autowired
@@ -105,6 +108,9 @@ class EndToEndWorkflowTests {
     private TUserMapper userMapper;
 
     @Autowired
+    private DatabaseMigrationConfig databaseMigrationConfig;
+
+    @Autowired
     private ZipStructureService zipStructureService;
 
     @Autowired
@@ -121,7 +127,7 @@ class EndToEndWorkflowTests {
         Long assignmentId = createPublishedAssignment(teacherToken);
 
         importStudent(teacherToken);
-        String studentToken = login("s001", "Stu123456");
+        String studentToken = login("s001", "123456");
 
         mockMvc.perform(get("/api/v1/users/import-template")
                         .header("Authorization", bearer(teacherToken)))
@@ -245,7 +251,7 @@ class EndToEndWorkflowTests {
         mockMvc.perform(get("/api/v1/ai-tasks/" + taskId + "/logs")
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(3));
+                .andExpect(jsonPath("$.data.length()").value(4));
 
         JsonNode report = getJson("/api/v1/ai-reports/" + submissionId, teacherToken).path("data");
         assertThat(report.path("totalScore").decimalValue()).isEqualByComparingTo("85.00");
@@ -434,7 +440,7 @@ class EndToEndWorkflowTests {
         mockMvc.perform(get("/api/v1/ai-tasks/" + taskId + "/logs")
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(6));
+                .andExpect(jsonPath("$.data.length()").value(8));
 
         mockMvc.perform(get("/api/v1/ai-reports/{submissionId}/history", submissionId)
                         .header("Authorization", bearer(teacherToken)))
@@ -466,7 +472,7 @@ class EndToEndWorkflowTests {
         String teacherToken = registerTeacher("t002", "CS-2");
         Long assignmentId = createPublishedAssignment(teacherToken, "Python Homework", "python");
         importStudent(teacherToken, "s002", "Bob", "CS-2");
-        String studentToken = login("s002", "Stu123456");
+        String studentToken = login("s002", "123456");
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "homework.txt",
@@ -487,7 +493,7 @@ class EndToEndWorkflowTests {
         String teacherToken = registerTeacher("t012", "CS-12");
         Long assignmentId = createPublishedAssignment(teacherToken, "Secure Zip Homework", "java");
         importStudent(teacherToken, "s012", "Liam", "CS-12");
-        String studentToken = login("s012", "Stu123456");
+        String studentToken = login("s012", "123456");
 
         MockMultipartFile fakeZip = new MockMultipartFile(
                 "file",
@@ -713,11 +719,65 @@ class EndToEndWorkflowTests {
     }
 
     @Test
+    void systemManagementUsesAdminRoleOnly() throws Exception {
+        String adminToken = registerAdmin("admin_console");
+        String teacherToken = registerTeacher("teacher_console");
+
+        mockMvc.perform(get("/api/v1/admin/accounts")
+                .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*].username", hasItems("admin_console", "teacher_console")));
+
+        mockMvc.perform(get("/api/v1/admin/accounts")
+                        .header("Authorization", bearer(teacherToken)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("仅管理员可操作"));
+
+        mockMvc.perform(post("/api/v1/admin/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"legacy_super_admin","realName":"Legacy","role":"super_admin","initialPassword":"Pass12345"}
+                                """)
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("角色仅支持 teacher/admin"));
+    }
+
+    @Test
+    void migrationDeletesSuperadminAccountAndConvertsLegacyRole() {
+        TUser deletedAccount = new TUser();
+        deletedAccount.setUsername("superadmin");
+        deletedAccount.setPassword("unused");
+        deletedAccount.setRole("super_admin");
+        deletedAccount.setCreatedAt(LocalDateTime.now());
+        deletedAccount.setUpdatedAt(LocalDateTime.now());
+        userMapper.insert(deletedAccount);
+
+        TUser convertedAccount = new TUser();
+        convertedAccount.setUsername("legacy_super_admin_role");
+        convertedAccount.setPassword("unused");
+        convertedAccount.setRole("super_admin");
+        convertedAccount.setCreatedAt(LocalDateTime.now());
+        convertedAccount.setUpdatedAt(LocalDateTime.now());
+        userMapper.insert(convertedAccount);
+
+        databaseMigrationConfig.migrate();
+
+        assertThat(userMapper.selectCount(new LambdaQueryWrapper<TUser>()
+                .eq(TUser::getUsername, "superadmin"))).isZero();
+        TUser converted = userMapper.selectOne(new LambdaQueryWrapper<TUser>()
+                .eq(TUser::getUsername, "legacy_super_admin_role")
+                .last("limit 1"));
+        assertThat(converted.getRole()).isEqualTo("admin");
+    }
+
+    @Test
     void assignmentEditingRulesAndStudentDeadlineVisibility() throws Exception {
         String teacherToken = registerTeacher("t008", "CS-8");
         String adminToken = registerAdmin("admin008");
         importStudent(teacherToken, "s010", "Ivan", "CS-8");
-        String studentToken = login("s010", "Stu123456");
+        String studentToken = login("s010", "123456");
 
         mockMvc.perform(post("/api/v1/assignments")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -795,7 +855,7 @@ class EndToEndWorkflowTests {
     void lateSubmissionPolicyAllowsMarkingAndAppliesPublishPenalty() throws Exception {
         String teacherToken = registerTeacher("t013", "CS-13");
         importStudent(teacherToken, "s013", "Mia", "CS-13");
-        String studentToken = login("s013", "Stu123456");
+        String studentToken = login("s013", "123456");
         String expiredEnd = LocalDateTime.now().minusDays(1).withNano(0).toString();
 
         Long forbiddenId = createPublishedAssignment(teacherToken, "No Late", "java",
@@ -857,7 +917,7 @@ class EndToEndWorkflowTests {
         String teacherToken = registerTeacher("t014", "CS-14");
         Long assignmentId = createPublishedAssignment(teacherToken, "Callback Validation", "java");
         importStudent(teacherToken, "s014", "Nina", "CS-14");
-        String studentToken = login("s014", "Stu123456");
+        String studentToken = login("s014", "123456");
         Long submissionId = submitZip(studentToken, assignmentId);
 
         TAiTask task = new TAiTask();
@@ -902,7 +962,7 @@ class EndToEndWorkflowTests {
         String teacherToken = registerTeacher("t018", "CS-18");
         Long assignmentId = createPublishedAssignment(teacherToken, "Token Quota", "java");
         importStudent(teacherToken, "s018", "Olivia", "CS-18");
-        String studentToken = login("s018", "Stu123456");
+        String studentToken = login("s018", "123456");
         Long submissionId = submitZip(studentToken, assignmentId);
 
         insertAiReport(submissionId, "Pro/deepseek-ai/DeepSeek-R1", 1234);
@@ -1017,7 +1077,7 @@ class EndToEndWorkflowTests {
         String teacherToken = registerTeacher("t009", "CS-9");
         Long assignmentId = createPublishedAssignment(teacherToken, "History Homework", "java");
         importStudent(teacherToken, "s011", "Judy", "CS-9");
-        String studentToken = login("s011", "Stu123456");
+        String studentToken = login("s011", "123456");
 
         Long firstSubmissionId = submitZip(studentToken, assignmentId);
         Long secondSubmissionId = submitZip(studentToken, assignmentId);
@@ -1050,7 +1110,7 @@ class EndToEndWorkflowTests {
         String teacherOneToken = registerTeacher("t003", "CS-3");
         Long assignmentId = createPublishedAssignment(teacherOneToken, "Isolation Homework", "java");
         importStudent(teacherOneToken, "s003", "Carol", "CS-3");
-        String studentToken = login("s003", "Stu123456");
+        String studentToken = login("s003", "123456");
         Long submissionId = submitZip(studentToken, assignmentId);
 
         String teacherTwoToken = registerTeacher("t004", "CS-4");
@@ -1069,7 +1129,7 @@ class EndToEndWorkflowTests {
                 .andExpect(status().isForbidden());
 
         importStudent(teacherTwoToken, "s004", "Dave", "CS-4");
-        String otherStudentToken = login("s004", "Stu123456");
+        String otherStudentToken = login("s004", "123456");
         mockMvc.perform(get("/api/v1/assignments")
                         .header("Authorization", bearer(otherStudentToken)))
                 .andExpect(status().isOk())
@@ -1087,7 +1147,6 @@ class EndToEndWorkflowTests {
         );
         mockMvc.perform(multipart("/api/v1/users/batch-import")
                         .file(file)
-                        .param("initialPassword", "Stu123456")
                         .header("Authorization", bearer(teacherToken))
                         .header("X-CSRF-Token", csrf(teacherToken)))
                 .andExpect(status().isForbidden())
@@ -1112,7 +1171,7 @@ class EndToEndWorkflowTests {
         mockMvc.perform(post("/api/v1/users/students")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"s007","realName":"Grace","className":"CS-7","initialPassword":"Stu123456"}
+                                {"username":"s007","realName":"Grace","className":"CS-7","idCardNo":"210102200001123456"}
                                 """)
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
@@ -1121,7 +1180,7 @@ class EndToEndWorkflowTests {
                 .andExpect(jsonPath("$.data.needPasswordChange").value(true));
 
         JsonNode loginResponse = postJson("/api/v1/auth/login", null, """
-                {"username":"s007","password":"Stu123456"}
+                {"username":"s007","password":"123456"}
                 """);
         assertThat(loginResponse.path("data").path("user").path("needPasswordChange").asBoolean()).isTrue();
 
@@ -1130,14 +1189,13 @@ class EndToEndWorkflowTests {
                 "students.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 studentsWorkbookRows(new String[][]{
-                        {"s007", "Grace Again", "CS-7"},
-                        {"s008", "", "CS-7"},
-                        {"s009", "Heidi", "CS-7"}
+                        {"s007", "Grace Again", "CS-7", "210102200001123456"},
+                        {"s008", "", "CS-7", "210102200001123456"},
+                        {"s009", "Heidi", "CS-7", "210102200001123456"}
                 })
         );
         mockMvc.perform(multipart("/api/v1/users/batch-import")
                         .file(file)
-                        .param("initialPassword", "Stu123456")
                         .header("Authorization", bearer(teacherToken))
                         .header("X-CSRF-Token", csrf(teacherToken)))
                 .andExpect(status().isOk())
@@ -1176,7 +1234,7 @@ class EndToEndWorkflowTests {
 
         importStudent(teacherToken, "s006", "Frank", "CS-6");
         JsonNode loginResponse = postJson("/api/v1/auth/login", null, """
-                {"username":"s006","password":"Stu123456"}
+                {"username":"s006","password":"123456"}
                 """);
         assertThat(loginResponse.path("data").path("user").path("needPasswordChange").asBoolean()).isTrue();
         assertThat(loginResponse.path("data").path("user").path("teacherRealName").asText()).isEqualTo("Teacher t006");
@@ -1199,7 +1257,7 @@ class EndToEndWorkflowTests {
                 .andExpect(jsonPath("$.data.user.needPasswordChange").value(true));
 
         mockMvc.perform(put("/api/v1/users/me/password")
-                        .param("oldPassword", "Stu123456")
+                        .param("oldPassword", "123456")
                         .param("newPassword", "Newpass123")
                         .header("Authorization", bearer(studentToken)))
                 .andExpect(status().isOk());
@@ -1222,7 +1280,6 @@ class EndToEndWorkflowTests {
         String updatedStudentToken = reloginResponse.path("data").path("token").asText();
 
         mockMvc.perform(post("/api/v1/users/reset-password/{studentId}", studentId)
-                        .param("newPassword", "Reset12345")
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk());
 
@@ -1232,7 +1289,7 @@ class EndToEndWorkflowTests {
                 .andExpect(jsonPath("$.message").value("Token 已失效"));
 
         JsonNode resetLoginResponse = postJson("/api/v1/auth/login", null, """
-                {"username":"s006","password":"Reset12345"}
+                {"username":"s006","password":"123456"}
                 """);
         assertThat(resetLoginResponse.path("data").path("user").path("needPasswordChange").asBoolean()).isTrue();
     }
@@ -1334,7 +1391,6 @@ class EndToEndWorkflowTests {
         );
         mockMvc.perform(multipart("/api/v1/users/batch-import")
                         .file(file)
-                        .param("initialPassword", "Stu123456")
                         .header("Authorization", bearer(token))
                         .header("X-CSRF-Token", csrf(token)))
                 .andExpect(status().isOk())
@@ -1441,11 +1497,13 @@ class EndToEndWorkflowTests {
             header.createCell(0).setCellValue("学号");
             header.createCell(1).setCellValue("姓名");
             header.createCell(2).setCellValue("班级");
+            header.createCell(3).setCellValue("身份证号");
             for (int i = 0; i < rows.length; i++) {
                 var row = sheet.createRow(i + 1);
                 row.createCell(0).setCellValue(rows[i][0]);
                 row.createCell(1).setCellValue(rows[i][1]);
                 row.createCell(2).setCellValue(rows[i][2]);
+                row.createCell(3).setCellValue(rows[i].length > 3 ? rows[i][3] : "210102200001123456");
             }
             workbook.write(out);
             return out.toByteArray();

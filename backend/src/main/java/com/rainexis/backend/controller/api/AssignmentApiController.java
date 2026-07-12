@@ -152,6 +152,7 @@ public class AssignmentApiController {
         }
         TAssignment assignment = new TAssignment();
         assignment.setTitle(request.title());
+        assignment.setCourseName(cleanText(request.courseName()));
         assignment.setDescription(request.description());
         assignment.setLanguage(request.language());
         assignment.setClassName(String.join(",", classNames));
@@ -177,6 +178,7 @@ public class AssignmentApiController {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         if ("published".equals(assignment.getStatus())) {
+            assignment.setCourseName(cleanText(request == null ? null : request.courseName()));
             assignment.setDescription(request == null ? null : request.description());
             assignmentMapper.updateById(assignment);
             return ApiResponse.ok(assignmentClassService.attachClassNames(assignment));
@@ -189,6 +191,7 @@ public class AssignmentApiController {
             throw BusinessException.badRequest("请选择至少一个发布班级");
         }
         assignment.setTitle(request.title());
+        assignment.setCourseName(cleanText(request.courseName()));
         assignment.setDescription(request.description());
         assignment.setLanguage(request.language());
         assignment.setClassName(String.join(",", classNames));
@@ -413,6 +416,14 @@ public class AssignmentApiController {
         return percent;
     }
 
+    private String cleanText(String value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.trim();
+        return text.isEmpty() ? null : text;
+    }
+
     private List<TRubricTemplateItem> applyTemplateSelection(TAssignment assignment, AssignmentRequest request) {
         if (request.rubricTemplateId() == null && (request.selectedRubricItemIds() == null || request.selectedRubricItemIds().isEmpty())) {
             assignment.setRubricTemplateId(null);
@@ -512,7 +523,7 @@ public class AssignmentApiController {
         );
     }
 
-    public record AssignmentRequest(String title, String description, String language, String className, List<String> classNames,
+    public record AssignmentRequest(String title, String courseName, String description, String language, String className, List<String> classNames,
                                     LocalDateTime startTime,
                                     LocalDateTime endTime, String latePolicy, Integer latePenaltyPercent, boolean published,
                                     Long rubricTemplateId, List<Long> selectedRubricItemIds) {

@@ -11,7 +11,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rainexis.backend.common.BusinessException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.MalformedInputException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -57,6 +62,13 @@ public class ZipStructureService {
     );
     private static final long MAX_TOTAL_UNCOMPRESSED = 100L * 1024 * 1024;
     private static final long MAX_SINGLE_FILE = 1024L * 1024;
+    private static final List<Charset> CODE_CHARSETS = List.of(
+            StandardCharsets.UTF_8,
+            Charset.forName("GB18030"),
+            Charset.forName("GBK"),
+            Charset.forName("Big5"),
+            Charset.forName("ISO-8859-1")
+    );
     private final ObjectMapper objectMapper;
 
     public ZipStructureService(ObjectMapper objectMapper) {
@@ -65,10 +77,21 @@ public class ZipStructureService {
 
     /** 分析ZIP文件：遍历条目 → 过滤代码文件 → 读取内容 → 生成结构JSON和依赖图 */
     public StructureResult analyze(Path zipPath, String language) {
+        try {
+            return analyzeWithCharset(zipPath, language, StandardCharsets.UTF_8);
+        } catch (BusinessException ex) {
+            if (isMalformedZipNameError(ex)) {
+                return analyzeWithCharset(zipPath, language, Charset.forName("GBK"));
+            }
+            throw ex;
+        }
+    }
+
+    private StructureResult analyzeWithCharset(Path zipPath, String language, Charset zipCharset) {
         List<Map<String, Object>> files = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         long[] totalSize = {0L};
-        try (ZipInputStream zip = new ZipInputStream(java.nio.file.Files.newInputStream(zipPath), StandardCharsets.UTF_8)) {
+        try (ZipInputStream zip = new ZipInputStream(java.nio.file.Files.newInputStream(zipPath), zipCharset)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 String entryName = normalizeZipPath(entry.getName());
@@ -96,18 +119,25 @@ public class ZipStructureService {
                     warnings.add("跳过超过 1MB 的代码文件: " + entryName);
                     continue;
                 }
-                String content = buffer.toString(StandardCharsets.UTF_8);
+                DecodedContent decoded = decodeCodeContent(buffer.toByteArray());
+                if (!StandardCharsets.UTF_8.equals(decoded.charset())) {
+                    warnings.add("代码文件已从 " + decoded.charset().displayName() + " 转为 UTF-8: " + entryName);
+                }
                 Map<String, Object> file = new LinkedHashMap<>();
                 file.put("path", entryName);
                 file.put("language", detectLanguage(extension, language));
                 file.put("size", buffer.size());
-                file.put("lines", content.isBlank() ? 0 : content.split("\\R", -1).length);
-                file.put("content", content);
+                file.put("encoding", decoded.charset().displayName());
+                file.put("lines", decoded.content().isBlank() ? 0 : decoded.content().split("\\R", -1).length);
+                file.put("content", decoded.content());
                 files.add(file);
             }
         } catch (BusinessException ex) {
             throw ex;
         } catch (IOException ex) {
+            if (isMalformedInput(ex)) {
+                throw BusinessException.badRequest("ZIP 文件名编码异常，请使用 UTF-8 或 GBK/Windows 默认编码重新压缩后上传: " + ex.getMessage());
+            }
             throw BusinessException.badRequest("ZIP 读取失败: " + ex.getMessage());
         }
         if (files.isEmpty()) {
@@ -132,6 +162,41 @@ public class ZipStructureService {
         } catch (Exception ex) {
             throw new BusinessException(500, "结构化 JSON 生成失败: " + ex.getMessage());
         }
+    }
+
+    private boolean isMalformedZipNameError(BusinessException ex) {
+        return ex.getMessage() != null && ex.getMessage().contains("ZIP 文件名编码异常");
+    }
+
+    private boolean isMalformedInput(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof MalformedInputException) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(Locale.ROOT).contains("malformed input")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private DecodedContent decodeCodeContent(byte[] bytes) {
+        for (Charset charset : CODE_CHARSETS) {
+            try {
+                String content = charset.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(bytes))
+                        .toString();
+                return new DecodedContent(content, charset);
+            } catch (CharacterCodingException ignored) {
+                // Try the next common source encoding before falling back to replacement characters.
+            }
+        }
+        return new DecodedContent(new String(bytes, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
     }
 
     /** 路径标准化，阻止目录遍历攻击（../ / 开头等） */
@@ -640,6 +705,9 @@ public class ZipStructureService {
     }
 
     private record InjectionPattern(String keyword, Pattern pattern, String severity) {
+    }
+
+    private record DecodedContent(String content, Charset charset) {
     }
 
     private static final Set<String> PYTHON_CALL_IGNORES = Set.of(

@@ -4,7 +4,7 @@
 --
 -- Test passwords:
 --   Teachers: Pass12345
---   Students: Stu123456
+--   Students: Stu123456 (legacy demo rows do not include encrypted ID card values)
 
 CREATE DATABASE IF NOT EXISTS `ai_code_grading`
   DEFAULT CHARACTER SET utf8mb4
@@ -39,6 +39,11 @@ CREATE TABLE `t_user` (
   `email` varchar(100) DEFAULT NULL,
   `phone` varchar(30) DEFAULT NULL,
   `class_name` varchar(500) DEFAULT NULL,
+  `id_card_encrypted` varchar(512) DEFAULT NULL,
+  `employee_no` varchar(50) DEFAULT NULL,
+  `college` varchar(100) DEFAULT NULL,
+  `teaching_course` varchar(200) DEFAULT NULL,
+  `teaching_class` varchar(500) DEFAULT NULL,
   `need_password_change` tinyint DEFAULT 0,
   `login_fail_count` int DEFAULT 0,
   `locked_until` datetime DEFAULT NULL,
@@ -52,10 +57,11 @@ CREATE TABLE `t_user` (
 CREATE TABLE `t_assignment` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `title` varchar(100) NOT NULL,
+  `course_name` varchar(100) DEFAULT NULL,
   `description` longtext,
   `teacher_id` bigint NOT NULL,
   `language` varchar(50) DEFAULT NULL,
-  `class_name` varchar(50) DEFAULT NULL,
+  `class_name` varchar(500) DEFAULT NULL,
   `start_time` datetime DEFAULT NULL,
   `end_time` datetime DEFAULT NULL,
   `late_policy` varchar(20) DEFAULT 'forbid',
@@ -190,6 +196,7 @@ CREATE TABLE `t_ai_task` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `submission_id` bigint NOT NULL,
   `assignment_id` bigint NOT NULL,
+  `batch_id` varchar(64) DEFAULT NULL,
   `model_name` varchar(50) DEFAULT NULL,
   `status` varchar(20) DEFAULT 'pending',
   `prompt_tokens` int DEFAULT 0,
@@ -201,6 +208,7 @@ CREATE TABLE `t_ai_task` (
   `end_time` datetime DEFAULT NULL,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  KEY `idx_ai_task_batch` (`batch_id`),
   KEY `idx_ai_task_assignment` (`assignment_id`),
   KEY `idx_ai_task_submission` (`submission_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -267,7 +275,7 @@ CREATE TABLE `t_grade_publish` (
 
 -- Seed users.
 -- Teachers all use password Pass12345.
--- Students all use password Stu123456 and need_password_change=1.
+-- Legacy demo students all use password Stu123456 and need_password_change=1.
 INSERT INTO `t_user`
   (`id`, `username`, `password`, `role`, `real_name`, `email`, `phone`, `class_name`, `need_password_change`, `login_fail_count`, `token_version`)
 VALUES
@@ -289,12 +297,12 @@ VALUES
   (303, 'a003', '$2a$10$4d9Fsu3t2gYDgDkbBIal8uOXoiTSwAz9p1lkMif1su3UYRYRz6mJ.', 'student', '卫三', 'a003@example.edu.cn', '13900000303', 'AI-1', 1, 0, 0);
 
 INSERT INTO `t_assignment`
-  (`id`, `title`, `description`, `teacher_id`, `language`, `class_name`, `start_time`, `end_time`, `late_policy`, `late_penalty_percent`, `status`)
+  (`id`, `title`, `course_name`, `description`, `teacher_id`, `language`, `class_name`, `start_time`, `end_time`, `late_policy`, `late_penalty_percent`, `status`)
 VALUES
-  (1, 'Java OOP Homework', '请上传 zip 格式代码包，入口类需可运行。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 14 DAY), 'forbid', 0, 'published'),
-  (2, 'Python Data Homework', '完成数据处理脚本并打包提交。', 2, 'python', 'CS-2', NOW(), DATE_ADD(NOW(), INTERVAL 10 DAY), 'allow_mark', 0, 'published'),
-  (3, 'AI Algorithm Homework', '实现一个简单搜索或分类算法。', 3, 'python', 'AI-1', NOW(), DATE_ADD(NOW(), INTERVAL 21 DAY), 'allow_penalty', 10, 'published'),
-  (4, 'CS-1 Draft Assignment', '草稿作业，学生暂不可见。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), 'forbid', 0, 'draft');
+  (1, 'Java OOP Homework', 'Java程序设计', '请上传 zip 格式代码包，入口类需可运行。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 14 DAY), 'forbid', 0, 'published'),
+  (2, 'Python Data Homework', 'Python数据处理', '完成数据处理脚本并打包提交。', 2, 'python', 'CS-2', NOW(), DATE_ADD(NOW(), INTERVAL 10 DAY), 'allow_mark', 0, 'published'),
+  (3, 'AI Algorithm Homework', '人工智能算法', '实现一个简单搜索或分类算法。', 3, 'python', 'AI-1', NOW(), DATE_ADD(NOW(), INTERVAL 21 DAY), 'allow_penalty', 10, 'published'),
+  (4, 'CS-1 Draft Assignment', 'Java程序设计', '草稿作业，学生暂不可见。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), 'forbid', 0, 'draft');
 
 INSERT INTO `t_assignment_class`
   (`assignment_id`, `class_name`)

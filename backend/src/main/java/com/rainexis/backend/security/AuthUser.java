@@ -15,4 +15,8 @@ public record AuthUser(Long id, String username, String role, String realName, S
     public boolean isStudent() {
         return "student".equals(role);
     }
+
+    public boolean isAdmin() {
+        return "admin".equals(role);
+    }
 }

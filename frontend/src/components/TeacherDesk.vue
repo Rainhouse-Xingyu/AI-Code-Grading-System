@@ -3,7 +3,7 @@
     <div class="page-heading">
       <div>
         <h2>教师工作台</h2>
-        <p>{{ user.className || "未设置班级" }} · 作业、评分与发布</p>
+        <p>{{ teacherSubtitle }} · 作业、评分与发布</p>
       </div>
       <el-button @click="refreshAssignments">刷新</el-button>
     </div>
@@ -34,33 +34,17 @@
       <el-card shadow="never">
         <template #header>学生管理</template>
         <div class="action-grid">
-          <el-button @click="downloadStudentTemplate">学生模板</el-button>
-          <el-input v-model="initialPassword" class="initial-password-input" placeholder="学生初始密码" show-password />
           <el-input v-model="studentSearch" class="student-search-input" clearable placeholder="按学号/姓名/班级搜索" />
-          <el-upload :show-file-list="false" :auto-upload="false" :on-change="selectStudentFile" accept=".xlsx">
+          <el-button @click="downloadStudentTemplate">学生模板</el-button>
+          <el-upload :show-file-list="false" :auto-upload="false" :on-change="selectStudentFile" accept=".xls,.xlsx">
             <el-button type="success">导入学生 Excel</el-button>
           </el-upload>
-          <el-button type="warning" @click="resetAllStudentPasswords">全部重置</el-button>
+          <el-button type="warning" :disabled="!canResetFilteredStudents" @click="resetAllStudentPasswords">重置密码</el-button>
           <el-button :disabled="!rubric" @click="rubricPreviewVisible = true">预览 Rubric</el-button>
         </div>
         <div class="upload-progress-stack">
           <el-progress v-if="studentUploadProgress > 0 && studentUploadProgress < 100" :percentage="studentUploadProgress" />
         </div>
-        <el-form class="student-create-form" label-position="top" @submit.prevent="createStudent">
-          <el-form-item label="学号">
-            <el-input v-model="studentForm.username" />
-          </el-form-item>
-          <el-form-item label="姓名">
-            <el-input v-model="studentForm.realName" />
-          </el-form-item>
-          <el-form-item label="班级">
-            <el-input v-model="studentForm.className" />
-          </el-form-item>
-          <el-form-item label="初始密码">
-            <el-input v-model="studentForm.initialPassword" show-password />
-          </el-form-item>
-          <el-button type="primary" native-type="submit">新增学生</el-button>
-        </el-form>
         <el-table :data="filteredStudents" height="160" class="student-table">
           <el-table-column prop="username" label="学号" min-width="100" />
           <el-table-column prop="realName" label="姓名" min-width="90" />
@@ -92,12 +76,13 @@
             <MetricCard label="候选容量" :value="formatBytes(cleanupPreview.candidateBytes)" />
             <MetricCard label="已删文件" :value="cleanupPreview.deletedCount || 0" />
           </div>
+          <el-empty v-else class="cleanup-empty" description="点击预览后显示可清理文件数量和容量" />
         </div>
       </el-card>
         </section>
 
         <RubricTemplatePanel
-          v-if="user.role === 'admin'"
+          v-if="isAdmin"
           v-show="activeTeacherModule === 'templates'"
           :rubric-templates="rubricTemplates"
           :template-form="templateForm"
@@ -119,8 +104,32 @@
           <div class="card-head">
             <span>提交记录</span>
             <div class="toolbar">
+              <el-input
+                v-model="submissionQuery.studentNo"
+                size="small"
+                class="submission-query-input"
+                clearable
+                placeholder="学号"
+                @keyup.enter="refreshSubmissions"
+              />
+              <el-select
+                v-model="submissionQuery.status"
+                size="small"
+                clearable
+                class="submission-query-select"
+                placeholder="状态"
+              >
+                <el-option
+                  v-for="item in submissionStatusOptions"
+                  :key="item.value"
+                  :label="item.label"
+                  :value="item.value"
+                />
+              </el-select>
+              <el-button size="small" @click="refreshSubmissions">查询</el-button>
               <el-checkbox v-model="jointReviewEnabled" size="small">联合评审</el-checkbox>
               <el-button size="small" type="primary" @click="startScoring">批量评分</el-button>
+              <el-button size="small" @click="openManualScoring">手动评分</el-button>
               <el-button size="small" type="success" @click="publishAllGrades">一键推送</el-button>
             </div>
           </div>
@@ -451,6 +460,78 @@
       <pre class="rubric-preview">{{ rubricPreviewJson }}</pre>
     </el-dialog>
 
+    <el-dialog v-model="manualScoringVisible" title="手动评分" width="1080px">
+      <div class="review-current-student manual-scoring-student">
+        <strong>{{ selectedSubmissionRow?.studentRealName || "已选学生" }}</strong>
+        <span>{{ selectedSubmissionRow?.studentUsername || "" }}</span>
+      </div>
+      <el-table :data="manualScoreRows" class="dimension-table" size="small" border max-height="360">
+        <el-table-column prop="name" label="评分点" min-width="180" />
+        <el-table-column label="得分" width="130">
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.score"
+              :min="0"
+              :max="Number(row.max_score || row.maxScore || 100)"
+              :precision="2"
+              controls-position="right"
+              size="small"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="满分" width="76">
+          <template #default="{ row }">{{ row.max_score ?? row.maxScore ?? 100 }}</template>
+        </el-table-column>
+        <el-table-column prop="comment" label="评语" min-width="360">
+          <template #default="{ row }">
+            <el-input v-model="row.comment" type="textarea" :rows="2" size="small" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <section class="issue-block manual-issue-block">
+        <div class="card-head">
+          <h3>问题列表</h3>
+          <el-button size="small" @click="addManualIssue">添加问题</el-button>
+        </div>
+        <el-table :data="manualIssueRows" class="issue-table" size="small" border max-height="220">
+          <el-table-column label="级别" width="120">
+            <template #default="{ row }">
+              <el-select v-model="row.severity" size="small">
+                <el-option label="错误" value="error" />
+                <el-option label="警告" value="warning" />
+                <el-option label="建议" value="suggestion" />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="文件" min-width="140">
+            <template #default="{ row }">
+              <el-input v-model="row.file" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="行" width="92">
+            <template #default="{ row }">
+              <el-input v-model="row.line" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="说明" min-width="220">
+            <template #default="{ row }">
+              <el-input v-model="row.description" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="76">
+            <template #default="{ $index }">
+              <el-button link type="danger" @click="removeManualIssue($index)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+      <template #footer>
+        <span class="manual-score-total">合计 {{ manualScoreTotal.toFixed(2) }} / 100</span>
+        <el-button @click="manualScoringVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualScoringSubmitting" @click="saveManualScoring">保存并进入复核发布</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="reportHistoryVisible" title="AI 报告历史" width="820px">
       <el-table :data="reportHistory" size="small" border>
         <el-table-column prop="id" label="报告" width="72" />
@@ -563,6 +644,7 @@ const props = defineProps({
   user: { type: Object, required: true },
   activeModule: { type: String, default: "assignments" }
 });
+const emit = defineEmits(["switch-module"]);
 
 const assignments = ref([]);
 const submissions = ref([]);
@@ -580,6 +662,10 @@ const scoringSelection = ref([]);
 const downloadSelection = ref([]);
 const scoringPreviewVisible = ref(false);
 const scoringSubmitting = ref(false);
+const manualScoringVisible = ref(false);
+const manualScoringSubmitting = ref(false);
+const manualScoreRows = ref([]);
+const manualIssueRows = ref([]);
 const jointReviewEnabled = ref(false);
 const scoringWatchIds = ref([]);
 const scoringPolling = ref(false);
@@ -608,10 +694,24 @@ const dimensionScores = ref([]);
 const finalScore = ref("");
 const reviewComment = ref("");
 const reportMarkdown = ref("");
-const initialPassword = ref("Stu123456");
 const studentSearch = ref("");
+const submissionQuery = reactive({
+  studentNo: "",
+  status: ""
+});
+const submissionStatusOptions = [
+  { label: "已上传", value: "uploaded" },
+  { label: "已解析", value: "parsed" },
+  { label: "解析失败", value: "parse_failed" },
+  { label: "评分中", value: "scoring" },
+  { label: "已评分", value: "scored" },
+  { label: "评分失败", value: "failed" },
+  { label: "已复核", value: "reviewed" },
+  { label: "已发布", value: "published" }
+];
 const assignmentForm = reactive({
   title: "Java OOP Homework",
+  courseName: "",
   description: "请上传 zip 格式代码包",
   language: "java",
   classNames: props.user.className ? [props.user.className] : [],
@@ -628,19 +728,22 @@ const templateForm = reactive({
   enabled: true,
   items: [emptyRubricTemplateItem()]
 });
-const studentForm = reactive({
-  username: "",
-  realName: "",
-  className: props.user.className || "",
-  initialPassword: "Stu123456"
-});
 const reportHtml = computed(() => renderMarkdown(reportMarkdown.value || report.value?.reportMarkdown || ""));
 const issueRows = computed(() => parseIssueRows(report.value?.suggestion));
 const rubricPreviewJson = computed(() => formatJson(rubric.value?.rubricJson || rubric.value?.parsedJson || rubric.value));
 const dimensionTotal = computed(() =>
   dimensionScores.value.reduce((sum, item) => sum + Number(item.score || 0), 0)
 );
+const manualScoreTotal = computed(() =>
+  manualScoreRows.value.reduce((sum, item) => sum + Number(item.score || 0), 0)
+);
 const isAdmin = computed(() => props.user.role === "admin");
+const teacherSubtitle = computed(() => {
+  const parts = [];
+  if (props.user.college) parts.push(props.user.college);
+  if (props.user.teachingClass || props.user.className) parts.push(`教授班级 ${props.user.teachingClass || props.user.className}`);
+  return parts.join(" · ") || "教师资料待完善";
+});
 const classOptions = computed(() => {
   const values = new Set();
   if (props.user.className) values.add(props.user.className);
@@ -661,6 +764,7 @@ const filteredStudents = computed(() => {
       .some((value) => String(value).toLowerCase().includes(keyword))
   );
 });
+const canResetFilteredStudents = computed(() => filteredStudents.value.length > 0);
 const publishTargets = computed(() => selectedRowsOrCurrent());
 const publishButtonText = computed(() => (publishTargets.value.length > 1 ? "批量推送" : "推送给学生"));
 const selectedAssignmentRecord = computed(() => assignments.value.find((item) => item.id === editingAssignmentId.value) || null);
@@ -736,7 +840,7 @@ async function refreshSubmissions() {
   }
   try {
     const [nextSubmissions, nextTasks, nextStats, nextProgress] = await Promise.all([
-      props.api.get(`/api/v1/submissions?assignment_id=${selectedAssignment.value}`),
+      props.api.get(submissionListUrl()),
       props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
       props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
       props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
@@ -754,6 +858,18 @@ async function refreshSubmissions() {
   } catch (error) {
     ElMessage.error(messageOf(error));
   }
+}
+
+function submissionListUrl() {
+  const params = new URLSearchParams();
+  params.set("assignment_id", selectedAssignment.value);
+  if (submissionQuery.studentNo.trim()) {
+    params.set("student_no", submissionQuery.studentNo.trim());
+  }
+  if (submissionQuery.status) {
+    params.set("status", submissionQuery.status);
+  }
+  return `/api/v1/submissions?${params.toString()}`;
 }
 
 function watchRunningTasks(nextTasks) {
@@ -842,6 +958,7 @@ function selectAssignment(row) {
   if (row) {
     editingAssignmentId.value = row.id;
     assignmentForm.title = row.title || "";
+    assignmentForm.courseName = row.courseName || "";
     assignmentForm.description = row.description || "";
     assignmentForm.language = row.language || "java";
     assignmentForm.classNames = assignmentClassNames(row);
@@ -920,6 +1037,7 @@ function resetAssignmentForm() {
   editingAssignmentId.value = null;
   selectedAssignment.value = null;
   assignmentForm.title = "";
+  assignmentForm.courseName = "";
   assignmentForm.description = "";
   assignmentForm.language = "java";
   assignmentForm.classNames = props.user.className ? [props.user.className] : [];
@@ -1054,7 +1172,7 @@ function removeRubricTemplateItem(index) {
 }
 
 async function saveRubricTemplate() {
-  if (props.user.role !== "admin") return;
+  if (!isAdmin.value) return;
   if (!templateForm.templateName.trim()) {
     ElMessage.warning("请输入模板名称");
     return;
@@ -1088,7 +1206,7 @@ async function saveRubricTemplate() {
 }
 
 async function uploadRubricTemplate(uploadFile) {
-  if (props.user.role !== "admin" || !uploadFile.raw) return;
+  if (!isAdmin.value || !uploadFile.raw) return;
   templateImporting.value = true;
   const form = new FormData();
   form.append("file", uploadFile.raw);
@@ -1162,7 +1280,6 @@ async function selectStudentFile(uploadFile) {
   if (!uploadFile.raw) return;
   const form = new FormData();
   form.append("file", uploadFile.raw);
-  form.append("initialPassword", initialPassword.value);
   studentUploadProgress.value = 1;
   try {
     await props.api.upload("/api/v1/users/batch-import", form, {
@@ -1217,25 +1334,9 @@ function removeCachedRubric(assignmentId) {
   }
 }
 
-async function createStudent() {
-  try {
-    await props.api.post("/api/v1/users/students", { ...studentForm });
-    studentForm.username = "";
-    studentForm.realName = "";
-    studentForm.initialPassword = "Stu123456";
-    await refreshStudents();
-    ElMessage.success("学生已新增");
-  } catch (error) {
-    ElMessage.error(messageOf(error));
-  }
-}
-
 async function resetStudentPassword(student) {
-  const password = studentForm.initialPassword || initialPassword.value || "Stu123456";
-  const params = new URLSearchParams();
-  params.set("newPassword", password);
   try {
-    await props.api.post(`/api/v1/users/reset-password/${student.id}?${params.toString()}`, {});
+    await props.api.post(`/api/v1/users/reset-password/${student.id}`, {});
     await refreshStudents();
     ElMessage.success("密码已重置");
   } catch (error) {
@@ -1244,10 +1345,9 @@ async function resetStudentPassword(student) {
 }
 
 async function resetAllStudentPasswords() {
-  const password = initialPassword.value || studentForm.initialPassword || "Stu123456";
   try {
     await ElMessageBox.confirm(
-      `确认将当前可见的 ${filteredStudents.value.length} 名学生密码全部重置为“${password}”？此操作会让学生旧登录状态失效。`,
+      `确认将当前可见的 ${filteredStudents.value.length} 名学生全部重置密码？此操作会让学生旧登录状态失效。`,
       "全部重置密码",
       {
         type: "warning",
@@ -1255,9 +1355,7 @@ async function resetAllStudentPasswords() {
         cancelButtonText: "取消"
       }
     );
-    const params = new URLSearchParams();
-    params.set("newPassword", password);
-    const result = await props.api.post(`/api/v1/users/reset-password-all?${params.toString()}`, {
+    const result = await props.api.post("/api/v1/users/reset-password-all", {
       studentIds: filteredStudents.value.map((student) => student.id)
     });
     await refreshStudents();
@@ -1305,6 +1403,88 @@ async function startScoring() {
     return;
   }
   scoringPreviewVisible.value = true;
+}
+
+async function openManualScoring() {
+  const targets = selectedRowsOrCurrent();
+  if (targets.length !== 1) {
+    ElMessage.warning("请先选择一份提交进行手动评分");
+    return;
+  }
+  const row = targets[0];
+  if (row.publishStatus === 1) {
+    ElMessage.warning("成绩已发布，需撤回后才能手动评分");
+    return;
+  }
+  selectedSubmission.value = row.id;
+  if (!rubric.value) {
+    await refreshActiveRubric();
+  }
+  const rows = rubricScoreRows();
+  if (!rows.length) {
+    ElMessage.warning("当前作业没有可用评分点");
+    return;
+  }
+  manualScoreRows.value = rows;
+  manualIssueRows.value = [];
+  manualScoringVisible.value = true;
+}
+
+function rubricScoreRows() {
+  const raw = rubric.value?.rubricJson || rubric.value?.parsedJson || rubric.value;
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const dimensions = Array.isArray(parsed?.dimensions) ? parsed.dimensions : [];
+    return dimensions.map((item) => ({
+      name: item.name || item.dimension || "评分点",
+      score: 0,
+      max_score: Number(item.max_score ?? item.maxScore ?? item.weight ?? 100),
+      comment: item.criteria ? `依据评分标准：${item.criteria}` : "教师手动评分。"
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function addManualIssue() {
+  manualIssueRows.value.push({
+    severity: "suggestion",
+    file: "project",
+    line: 1,
+    description: ""
+  });
+}
+
+function removeManualIssue(index) {
+  manualIssueRows.value.splice(index, 1);
+}
+
+async function saveManualScoring() {
+  if (!selectedSubmission.value || !manualScoreRows.value.length) return;
+  manualScoringSubmitting.value = true;
+  try {
+    const saved = await props.api.post(`/api/v1/ai-reports/${selectedSubmission.value}/manual`, {
+      totalScore: Number(manualScoreTotal.value.toFixed(2)),
+      dimensionScores: manualScoreRows.value,
+      issues: manualIssueRows.value.filter((item) => (item.description || "").trim())
+    });
+    manualScoringVisible.value = false;
+    report.value = saved;
+    dimensionScores.value = parseDimensionScores(saved.scoreDetailJson || saved.scoreJson);
+    finalScore.value = dimensionScores.value.length
+      ? dimensionTotal.value.toFixed(2)
+      : String(saved.totalScore ?? "");
+    reviewComment.value = "教师手动评分。";
+    reportMarkdown.value = saved.reportMarkdown || "";
+    await refreshSubmissions();
+    emit("switch-module", "review");
+    ElMessage.success("手动评分已保存，可继续复核发布");
+  } catch (error) {
+    ElMessage.error(messageOf(error));
+  } finally {
+    manualScoringSubmitting.value = false;
+  }
 }
 
 async function confirmScoring() {
@@ -1355,7 +1535,7 @@ async function checkScoringProgress() {
   try {
     const [nextTasks, nextSubmissions, nextStats, nextProgress] = await Promise.all([
       props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
-      props.api.get(`/api/v1/submissions?assignment_id=${selectedAssignment.value}`),
+      props.api.get(submissionListUrl()),
       props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
       props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);

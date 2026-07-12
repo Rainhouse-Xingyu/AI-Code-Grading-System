@@ -7,6 +7,7 @@ import com.rainexis.backend.entity.TUser;
 import com.rainexis.backend.mapper.TUserMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.security.PasswordService;
+import com.rainexis.backend.security.SensitiveDataService;
 import com.rainexis.backend.service.business.AccessControlService;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
@@ -45,13 +47,16 @@ public class UserApiController {
     private final TUserMapper userMapper;
     private final PasswordService passwordService;
     private final AccessControlService accessControlService;
+    private final SensitiveDataService sensitiveDataService;
 
     public UserApiController(TUserMapper userMapper,
                              PasswordService passwordService,
-                             AccessControlService accessControlService) {
+                             AccessControlService accessControlService,
+                             SensitiveDataService sensitiveDataService) {
         this.userMapper = userMapper;
         this.passwordService = passwordService;
         this.accessControlService = accessControlService;
+        this.sensitiveDataService = sensitiveDataService;
     }
 
     /** 获取当前登录用户的个人信息 */
@@ -97,10 +102,9 @@ public class UserApiController {
 
     /** 通过 Excel 文件批量导入学生（需要 CSRF Token） */
     @PostMapping("/batch-import")
-    public ApiResponse<Map<String, Object>> batchImport(@RequestParam MultipartFile file,
-                                                        @RequestParam(defaultValue = "Stu123456") String initialPassword) {
+    public ApiResponse<Map<String, Object>> batchImport(@RequestParam MultipartFile file) {
         AuthContext.requireTeacher();
-        passwordService.requireStrong(initialPassword);
+        ensureExcelFile(file);
         List<TUser> imported = new ArrayList<>();
         List<Map<String, Object>> successRows = new ArrayList<>();
         List<Map<String, Object>> skippedRows = new ArrayList<>();
@@ -121,12 +125,17 @@ public class UserApiController {
                 }
                 String realName = formatter.formatCellValue(row.getCell(1)).trim();
                 String importedClassName = formatter.formatCellValue(row.getCell(2)).trim();
+                String idCardNo = normalizeIdCard(formatter.formatCellValue(row.getCell(3)));
                 if (realName.isBlank()) {
                     failedRows.add(importResult(rowNumber, username, "failed", "姓名不能为空"));
                     continue;
                 }
                 if (importedClassName.isBlank()) {
                     failedRows.add(importResult(rowNumber, username, "failed", "班级不能为空"));
+                    continue;
+                }
+                if (idCardNo == null) {
+                    failedRows.add(importResult(rowNumber, username, "failed", "学生隐私凭证不能为空且至少 6 位"));
                     continue;
                 }
                 if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username)) > 0) {
@@ -137,13 +146,14 @@ public class UserApiController {
                 student.setUsername(username);
                 student.setRealName(realName);
                 String teacherClassName = AuthContext.get().className();
-                if (teacherClassName != null && !teacherClassName.isBlank()
+                if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()
                         && !teacherClassName.equals(importedClassName)) {
                     throw BusinessException.forbidden("只能导入自己班级的学生");
                 }
                 student.setClassName(importedClassName);
                 student.setRole("student");
-                student.setPassword(passwordService.encode(initialPassword));
+                student.setIdCardEncrypted(sensitiveDataService.encrypt(idCardNo));
+                student.setPassword(passwordService.encode(initialPasswordFromIdCard(idCardNo)));
                 student.setNeedPasswordChange(true);
                 student.setLoginFailCount(0);
                 student.setTokenVersion(0);
@@ -163,7 +173,7 @@ public class UserApiController {
         result.put("success", successRows);
         result.put("skipped", skippedRows);
         result.put("failed", failedRows);
-        result.put("students", imported);
+        result.put("students", imported.stream().map(this::userPayload).toList());
         return ApiResponse.ok(result);
     }
 
@@ -177,10 +187,10 @@ public class UserApiController {
         if (request.realName() == null || request.realName().isBlank()) {
             throw BusinessException.badRequest("姓名不能为空");
         }
-        String password = request.initialPassword() == null || request.initialPassword().isBlank()
-                ? "Stu123456"
-                : request.initialPassword();
-        passwordService.requireStrong(password);
+        String idCardNo = normalizeIdCard(request.idCardNo());
+        if (idCardNo == null) {
+            throw BusinessException.badRequest("请通过学生导入创建账号");
+        }
         String username = request.username().trim();
         if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username)) > 0) {
             throw BusinessException.conflict("学号已存在");
@@ -191,7 +201,8 @@ public class UserApiController {
         student.setRealName(request.realName().trim());
         student.setClassName(className);
         student.setRole("student");
-        student.setPassword(passwordService.encode(password));
+        student.setIdCardEncrypted(sensitiveDataService.encrypt(idCardNo));
+        student.setPassword(passwordService.encode(initialPasswordFromIdCard(idCardNo)));
         student.setNeedPasswordChange(true);
         student.setLoginFailCount(0);
         student.setTokenVersion(0);
@@ -203,12 +214,12 @@ public class UserApiController {
 
     /** 教师查询学生列表（默认只返回本班学生，admin可查看所有） */
     @GetMapping("/students")
-    public ApiResponse<List<TUser>> students(@RequestParam(name = "class", required = false) String className,
-                                             @RequestParam(name = "q", required = false) String keyword) {
+    public ApiResponse<List<Map<String, Object>>> students(@RequestParam(name = "class", required = false) String className,
+                                                           @RequestParam(name = "q", required = false) String keyword) {
         AuthContext.requireTeacher();
         LambdaQueryWrapper<TUser> query = new LambdaQueryWrapper<TUser>().eq(TUser::getRole, "student");
         String teacherClassName = AuthContext.get().className();
-        if (!"admin".equals(AuthContext.get().role()) && teacherClassName != null && !teacherClassName.isBlank()) {
+        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
             if (className != null && !className.isBlank() && !teacherClassName.equals(className)) {
                 throw BusinessException.forbidden("只能查看自己班级的学生");
             }
@@ -225,7 +236,12 @@ public class UserApiController {
                     .or()
                     .like(TUser::getClassName, cleanedKeyword));
         }
-        return ApiResponse.ok(userMapper.selectList(query.orderByAsc(TUser::getClassName).orderByAsc(TUser::getUsername)));
+        List<Map<String, Object>> students = userMapper
+                .selectList(query.orderByAsc(TUser::getClassName).orderByAsc(TUser::getUsername))
+                .stream()
+                .map(this::userPayload)
+                .toList();
+        return ApiResponse.ok(students);
     }
 
     /** 下载学生批量导入的 Excel 模板 */
@@ -238,13 +254,16 @@ public class UserApiController {
             header.createCell(0).setCellValue("学号");
             header.createCell(1).setCellValue("姓名");
             header.createCell(2).setCellValue("班级");
+            header.createCell(3).setCellValue("登录凭证");
             var example = sheet.createRow(1);
             example.createCell(0).setCellValue("2024001");
             example.createCell(1).setCellValue("张三");
             example.createCell(2).setCellValue(AuthContext.get().className() == null ? "软件工程2401" : AuthContext.get().className());
+            example.createCell(3).setCellValue("");
             sheet.autoSizeColumn(0);
             sheet.autoSizeColumn(1);
             sheet.autoSizeColumn(2);
+            sheet.autoSizeColumn(3);
             workbook.write(out);
             return downloadBytes(out.toByteArray(), "学生导入模板.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -255,12 +274,10 @@ public class UserApiController {
 
     /** 教师重置学生密码 */
     @PostMapping("/reset-password/{studentId}")
-    public ApiResponse<Map<String, Object>> resetPassword(@PathVariable Long studentId,
-                                                          @RequestParam(defaultValue = "Stu123456") String newPassword) {
+    public ApiResponse<Map<String, Object>> resetPassword(@PathVariable Long studentId) {
         AuthContext.requireTeacher();
-        passwordService.requireStrong(newPassword);
         TUser student = accessControlService.requireTeacherCanManageStudent(studentId);
-        student.setPassword(passwordService.encode(newPassword));
+        student.setPassword(passwordService.encode(passwordFromStoredIdCard(student)));
         student.setNeedPasswordChange(true);
         student.setLoginFailCount(0);
         student.setLockedUntil(null);
@@ -272,21 +289,19 @@ public class UserApiController {
 
     /** 教师批量重置当前可管理学生密码 */
     @PostMapping("/reset-password-all")
-    public ApiResponse<Map<String, Object>> resetAllPasswords(@RequestParam(defaultValue = "Stu123456") String newPassword,
-                                                              @RequestBody(required = false) ResetAllPasswordRequest request) {
+    public ApiResponse<Map<String, Object>> resetAllPasswords(@RequestBody(required = false) ResetAllPasswordRequest request) {
         AuthContext.requireTeacher();
-        passwordService.requireStrong(newPassword);
         LambdaQueryWrapper<TUser> query = new LambdaQueryWrapper<TUser>().eq(TUser::getRole, "student");
         if (request != null && request.studentIds() != null && !request.studentIds().isEmpty()) {
             query.in(TUser::getId, request.studentIds());
         }
         String teacherClassName = AuthContext.get().className();
-        if (!"admin".equals(AuthContext.get().role()) && teacherClassName != null && !teacherClassName.isBlank()) {
+        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
             query.eq(TUser::getClassName, teacherClassName);
         }
         List<TUser> students = userMapper.selectList(query);
         for (TUser student : students) {
-            student.setPassword(passwordService.encode(newPassword));
+            student.setPassword(passwordService.encode(passwordFromStoredIdCard(student)));
             student.setNeedPasswordChange(true);
             student.setLoginFailCount(0);
             student.setLockedUntil(null);
@@ -297,6 +312,31 @@ public class UserApiController {
         return ApiResponse.ok(Map.of("resetCount", students.size()));
     }
 
+    private String passwordFromStoredIdCard(TUser student) {
+        String idCardNo = normalizeIdCard(sensitiveDataService.decrypt(student.getIdCardEncrypted()));
+        if (idCardNo == null) {
+            throw BusinessException.badRequest("学生 " + student.getUsername() + " 未录入隐私凭证，无法重置密码");
+        }
+        return initialPasswordFromIdCard(idCardNo);
+    }
+
+    private String initialPasswordFromIdCard(String idCardNo) {
+        String normalized = normalizeIdCard(idCardNo);
+        if (normalized == null) {
+            throw BusinessException.badRequest("学生隐私凭证不能为空且至少 6 位");
+        }
+        return normalized.substring(normalized.length() - 6);
+    }
+
+    private String normalizeIdCard(String idCardNo) {
+        String cleaned = clean(idCardNo);
+        if (cleaned == null) {
+            return null;
+        }
+        cleaned = cleaned.replace(" ", "").toUpperCase(Locale.ROOT);
+        return cleaned.length() < 6 ? null : cleaned;
+    }
+
     private int nextTokenVersion(TUser user) {
         return (user.getTokenVersion() == null ? 0 : user.getTokenVersion()) + 1;
     }
@@ -304,7 +344,7 @@ public class UserApiController {
     private String studentClassName(String requestedClassName) {
         String teacherClassName = AuthContext.get().className();
         String className = clean(requestedClassName);
-        if (!"admin".equals(AuthContext.get().role()) && teacherClassName != null && !teacherClassName.isBlank()) {
+        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
             if (className != null && !teacherClassName.equals(className)) {
                 throw BusinessException.forbidden("只能新增自己班级的学生");
             }
@@ -324,6 +364,14 @@ public class UserApiController {
         return cleaned.isEmpty() ? null : cleaned;
     }
 
+    private void ensureExcelFile(MultipartFile file) {
+        String filename = file == null ? "" : file.getOriginalFilename();
+        String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls")) {
+            throw BusinessException.badRequest("学生导入仅支持 .xlsx 或 .xls 文件");
+        }
+    }
+
     private Map<String, Object> userPayload(TUser user) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("id", user.getId());
@@ -333,6 +381,10 @@ public class UserApiController {
         payload.put("email", user.getEmail() == null ? "" : user.getEmail());
         payload.put("phone", user.getPhone() == null ? "" : user.getPhone());
         payload.put("className", user.getClassName() == null ? "" : user.getClassName());
+        payload.put("employeeNo", user.getEmployeeNo() == null ? "" : user.getEmployeeNo());
+        payload.put("college", user.getCollege() == null ? "" : user.getCollege());
+        payload.put("teachingCourse", user.getTeachingCourse() == null ? "" : user.getTeachingCourse());
+        payload.put("teachingClass", user.getTeachingClass() == null ? "" : user.getTeachingClass());
         payload.put("needPasswordChange", Boolean.TRUE.equals(user.getNeedPasswordChange()));
         TUser teacher = teacherForStudent(user);
         payload.put("teacherUsername", teacher == null ? "" : teacher.getUsername());
@@ -363,7 +415,7 @@ public class UserApiController {
     public record ProfileUpdateRequest(String realName, String email, String phone) {
     }
 
-    public record CreateStudentRequest(String username, String realName, String className, String initialPassword) {
+    public record CreateStudentRequest(String username, String realName, String className, String idCardNo) {
     }
 
     public record ResetAllPasswordRequest(List<Long> studentIds) {

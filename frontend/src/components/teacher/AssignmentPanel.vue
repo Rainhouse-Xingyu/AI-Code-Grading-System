@@ -1,11 +1,14 @@
 <template>
   <section class="teacher-module-panel">
-    <div class="grid two">
-      <el-card v-if="isAdmin" shadow="never">
+    <div class="grid two assignment-management-grid" :class="{ 'assignment-list-only-grid': !isAdmin }">
+      <el-card v-if="isAdmin" shadow="never" class="assignment-form-card">
         <template #header>{{ editingAssignmentId ? "编辑作业" : "创建作业" }}</template>
         <el-form label-position="top" class="assignment-form" @submit.prevent="$emit('save-assignment')">
           <el-form-item label="标题">
             <el-input v-model="assignmentForm.title" />
+          </el-form-item>
+          <el-form-item label="课程名称">
+            <el-input v-model="assignmentForm.courseName" />
           </el-form-item>
           <el-form-item label="语言">
             <el-select v-model="assignmentForm.language">
@@ -98,12 +101,17 @@
         </el-form>
       </el-card>
 
-      <el-card shadow="never">
+      <el-card shadow="never" class="assignment-list-card">
         <template #header>作业列表</template>
         <el-table :data="assignments" height="360" highlight-current-row @current-change="$emit('select-assignment', $event)">
-          <el-table-column prop="title" label="标题" min-width="160" />
+          <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+          <el-table-column prop="courseName" label="课程" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
           <el-table-column label="班级" min-width="130" show-overflow-tooltip>
             <template #default="{ row }">{{ displayAssignmentClasses(row) || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="截止时间" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }">{{ formatDateTime(row.endTime) }}</template>
           </el-table-column>
           <el-table-column prop="language" label="语言" width="90" />
           <el-table-column label="状态" width="96">
@@ -211,6 +219,11 @@ function assignmentClassNames(assignment) {
 
 function displayAssignmentClasses(assignment) {
   return assignmentClassNames(assignment).join("、");
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  return String(value).replace("T", " ").slice(0, 16);
 }
 
 function assignmentStatusText(status) {

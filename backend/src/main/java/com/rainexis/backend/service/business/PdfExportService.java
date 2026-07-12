@@ -124,7 +124,9 @@ public class PdfExportService {
             String className = student == null ? "" : nullToEmpty(student.getClassName());
             String studentNo = student == null ? String.valueOf(submission.getStudentId()) : nullToEmpty(student.getUsername());
             String studentName = student == null ? "" : nullToEmpty(student.getRealName());
-            document.add(new Paragraph("AI 代码评分报告", titleFont));
+            Paragraph reportTitle = new Paragraph(reportTitle(assignment), titleFont);
+            reportTitle.setAlignment(Element.ALIGN_CENTER);
+            document.add(reportTitle);
             document.add(new Paragraph("文件名：" + title, font));
             document.add(new Paragraph("作业：" + (assignment == null ? submission.getAssignmentId() : nullToEmpty(assignment.getTitle())), font));
             document.add(new Paragraph("学号：" + studentNo, font));
@@ -211,6 +213,13 @@ public class PdfExportService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String reportTitle(TAssignment assignment) {
+        if (assignment != null && hasText(assignment.getCourseName())) {
+            return assignment.getCourseName().trim() + "评分报告";
+        }
+        return "AI 代码评分报告";
     }
 
     /** 将本次评分标准追加到PDF文档中 */

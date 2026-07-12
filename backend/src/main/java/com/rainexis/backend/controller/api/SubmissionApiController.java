@@ -157,15 +157,23 @@ public class SubmissionApiController {
 
     /** 教师查看指定作业下所有学生的提交记录 */
     @GetMapping
-    public ApiResponse<List<Map<String, Object>>> listByAssignment(@RequestParam(name = "assignment_id") Long assignmentId) {
+    public ApiResponse<List<Map<String, Object>>> listByAssignment(@RequestParam(name = "assignment_id") Long assignmentId,
+                                                                    @RequestParam(name = "student_no", required = false) String studentNo,
+                                                                    @RequestParam(name = "status", required = false) String status) {
         AuthContext.requireTeacher();
         accessControlService.requireAssignmentAccess(assignmentId);
-        List<TSubmission> submissions = submissionMapper.selectList(new LambdaQueryWrapper<TSubmission>()
+        LambdaQueryWrapper<TSubmission> query = new LambdaQueryWrapper<TSubmission>()
                 .eq(TSubmission::getAssignmentId, assignmentId)
-                .eq(TSubmission::getCurrent, true)
-                .orderByDesc(TSubmission::getUploadTime));
+                .eq(TSubmission::getCurrent, true);
+        String cleanedStatus = clean(status);
+        if (cleanedStatus != null) {
+            query.eq(TSubmission::getStatus, cleanedStatus);
+        }
+        List<TSubmission> submissions = submissionMapper.selectList(query.orderByDesc(TSubmission::getUploadTime));
+        String cleanedStudentNo = clean(studentNo);
         return ApiResponse.ok(submissions.stream()
                 .filter(accessControlService::canTeacherAccessSubmission)
+                .filter(submission -> matchesStudentNo(submission, cleanedStudentNo))
                 .map(this::submissionPayload)
                 .toList());
     }
@@ -264,5 +272,21 @@ public class SubmissionApiController {
         return assignment.getLatePolicy() == null || assignment.getLatePolicy().isBlank()
                 ? "forbid"
                 : assignment.getLatePolicy();
+    }
+
+    private boolean matchesStudentNo(TSubmission submission, String studentNo) {
+        if (studentNo == null) {
+            return true;
+        }
+        TUser student = userMapper.selectById(submission.getStudentId());
+        return student != null && student.getUsername() != null && student.getUsername().contains(studentNo);
+    }
+
+    private String clean(String value) {
+        if (value == null) {
+            return null;
+        }
+        String cleaned = value.trim();
+        return cleaned.isEmpty() ? null : cleaned;
     }
 }

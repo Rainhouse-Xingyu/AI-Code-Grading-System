@@ -25,29 +25,32 @@ public class AiTaskDispatcherService {
     private final boolean dispatcherEnabled;
     private final int maxConcurrentTasks;
     private final int runningTimeoutMinutes;
+    private final RuntimeConfigService runtimeConfigService;
 
     public AiTaskDispatcherService(TAiTaskMapper taskMapper,
                                    TSubmissionMapper submissionMapper,
                                    AiScoringService aiScoringService,
                                    @Value("${app.ai.dispatcher-enabled}") boolean dispatcherEnabled,
                                    @Value("${app.ai.max-concurrent-tasks}") int maxConcurrentTasks,
-                                   @Value("${app.ai.running-timeout-minutes}") int runningTimeoutMinutes) {
+                                   @Value("${app.ai.running-timeout-minutes}") int runningTimeoutMinutes,
+                                   RuntimeConfigService runtimeConfigService) {
         this.taskMapper = taskMapper;
         this.submissionMapper = submissionMapper;
         this.aiScoringService = aiScoringService;
         this.dispatcherEnabled = dispatcherEnabled;
         this.maxConcurrentTasks = Math.max(1, maxConcurrentTasks);
         this.runningTimeoutMinutes = Math.max(5, runningTimeoutMinutes);
+        this.runtimeConfigService = runtimeConfigService;
         this.executor = Executors.newFixedThreadPool(this.maxConcurrentTasks);
     }
 
     @Scheduled(fixedDelayString = "${app.ai.dispatch-interval-ms}")
     public void dispatchPendingTasks() {
-        if (!dispatcherEnabled) {
+        if (!dispatcherEnabled()) {
             return;
         }
         recoverStaleRunningTasks();
-        int slots = maxConcurrentTasks - activeTasks.get();
+        int slots = maxConcurrentTasks() - activeTasks.get();
         if (slots <= 0) {
             return;
         }
@@ -78,7 +81,7 @@ public class AiTaskDispatcherService {
     }
 
     public int maxConcurrentTasks() {
-        return maxConcurrentTasks;
+        return Math.min(maxConcurrentTasks, Math.max(1, runtimeConfigService.getInt("AI_MAX_CONCURRENT_TASKS", maxConcurrentTasks)));
     }
 
     private boolean claim(TAiTask task) {
@@ -102,7 +105,7 @@ public class AiTaskDispatcherService {
     }
 
     private void recoverStaleRunningTasks() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(runningTimeoutMinutes);
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(runningTimeoutMinutes());
         List<TAiTask> staleTasks = taskMapper.selectList(new LambdaQueryWrapper<TAiTask>()
                 .eq(TAiTask::getStatus, "running")
                 .lt(TAiTask::getStartTime, cutoff));
@@ -118,5 +121,13 @@ public class AiTaskDispatcherService {
     @PreDestroy
     public void shutdown() {
         executor.shutdownNow();
+    }
+
+    private boolean dispatcherEnabled() {
+        return runtimeConfigService.getBoolean("AI_DISPATCHER_ENABLED", dispatcherEnabled);
+    }
+
+    private int runningTimeoutMinutes() {
+        return Math.max(5, runtimeConfigService.getInt("AI_RUNNING_TIMEOUT_MINUTES", runningTimeoutMinutes));
     }
 }

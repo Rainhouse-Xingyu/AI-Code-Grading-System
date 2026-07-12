@@ -8,10 +8,13 @@
         <el-icon><School /></el-icon>
         <span>评分系统</span>
       </div>
-      <el-button v-if="user.role !== 'student'" :type="view === 'teacher' ? 'primary' : 'default'" plain @click="view = 'teacher'">
+      <el-button v-if="user.role !== 'student'" class="workspace-switch" :type="view === 'teacher' ? 'primary' : 'default'" plain @click="view = 'teacher'">
         教师工作台
       </el-button>
-      <el-button v-if="user.role === 'student'" :type="view === 'student' ? 'primary' : 'default'" plain @click="view = 'student'">
+      <el-button v-if="user.role === 'admin'" class="workspace-switch" :type="view === 'admin' ? 'primary' : 'default'" plain @click="view = 'admin'">
+        系统管理
+      </el-button>
+      <el-button v-if="user.role === 'student'" class="workspace-switch" :type="view === 'student' ? 'primary' : 'default'" plain @click="view = 'student'">
         学生端
       </el-button>
       <nav v-if="view === 'teacher'" class="sidebar-nav">
@@ -45,7 +48,8 @@
           <el-button @click="signOut">退出</el-button>
         </div>
       </header>
-      <TeacherDesk v-if="view === 'teacher'" :api="api" :user="user" :active-module="teacherModule" />
+      <TeacherDesk v-if="view === 'teacher'" :api="api" :user="user" :active-module="teacherModule" @switch-module="teacherModule = $event" />
+      <AdminDesk v-else-if="view === 'admin'" :api="api" />
       <StudentDesk v-else :api="api" />
     </section>
     <el-dialog v-model="passwordDialogVisible" title="个人设置" width="460px">
@@ -86,6 +90,7 @@ import { createApi, messageOf } from "./JS/api.js";
 import AuthView from "./components/AuthView.vue";
 import TeacherDesk from "./components/TeacherDesk.vue";
 import StudentDesk from "./components/StudentDesk.vue";
+import AdminDesk from "./components/AdminDesk.vue";
 
 const token = ref(localStorage.getItem("token") || "");
 const csrfToken = ref(localStorage.getItem("csrfToken") || "");
@@ -104,11 +109,18 @@ const api = computed(() => createApi(token.value, csrfToken.value, {
 }));
 const userSubtitle = computed(() => {
   if (!user.value) return "";
-  const parts = [user.value.role, user.value.className || "未设置班级"];
-  if (user.value.role === "student" && user.value.teacherRealName) {
-    parts.push(`任课教师 ${user.value.teacherRealName}`);
+  if (user.value.role === "student") {
+    const parts = [`学号 ${user.value.username}`];
+    if (user.value.className) parts.push(`班级 ${user.value.className}`);
+    return parts.join(" · ");
   }
-  return parts.join(" · ");
+  if (["teacher", "admin"].includes(user.value.role)) {
+    const parts = [];
+    if (user.value.college) parts.push(user.value.college);
+    if (user.value.teachingClass || user.value.className) parts.push(`教授班级 ${user.value.teachingClass || user.value.className}`);
+    return parts.join(" · ") || "教师资料待完善";
+  }
+  return "系统配置与账号管理";
 });
 const teacherNavItems = computed(() => [
   { key: "assignments", label: "作业", icon: Files },

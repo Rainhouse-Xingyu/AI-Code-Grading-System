@@ -32,6 +32,10 @@ public class TAssignment implements Serializable {
     @TableField("title")
     private String title;
 
+    /** 课程名称，用于评分报告标题 */
+    @TableField("course_name")
+    private String courseName;
+
     /** 作业描述/要求 */
     @TableField("description")
     private String description;

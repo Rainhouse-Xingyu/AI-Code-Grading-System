@@ -9,8 +9,35 @@
 
 .teacher-desk .assignment-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px;
+  grid-template-columns: minmax(0, 1fr) 168px;
   gap: 0 14px;
+}
+
+.assignment-management-grid {
+  grid-template-columns: minmax(380px, 440px) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.assignment-management-grid.assignment-list-only-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.assignment-form-card,
+.assignment-list-card {
+  min-width: 0;
+}
+
+.assignment-list-card {
+  width: 100%;
+}
+
+.assignment-list-card .el-table {
+  width: 100%;
+}
+
+.assignment-form-card .el-card__body,
+.assignment-list-card .el-card__body {
+  min-height: 520px;
 }
 
 .teacher-desk .wide-field {
@@ -95,12 +122,16 @@
   gap: 10px;
 }
 
-.initial-password-input {
-  width: 180px;
+.student-search-input {
+  width: 280px;
 }
 
-.student-search-input {
-  width: 220px;
+.submission-query-input {
+  width: 150px;
+}
+
+.submission-query-select {
+  width: 140px;
 }
 
 .upload-progress,
@@ -142,6 +173,13 @@
   margin-top: 16px;
   border-top: 1px solid #e4e9f1;
   padding-top: 14px;
+}
+
+.cleanup-empty {
+  min-height: 90px;
+  border: 1px dashed #d8e0ec;
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
 .template-admin-grid {
@@ -364,6 +402,69 @@
   font-size: 15px;
 }
 
+.admin-desk {
+  align-content: start;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.admin-panel {
+  min-width: 0;
+}
+
+.config-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  cursor: help;
+}
+
+.config-name strong {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.config-name span {
+  overflow: hidden;
+  color: #667085;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-account-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  align-items: end;
+}
+
+.admin-account-form .form-actions {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.admin-search {
+  width: 240px;
+}
+
+.admin-password {
+  width: 160px;
+}
+
 @media (max-width: 1020px) {
   .review-grid,
   .review-detail,
@@ -373,6 +474,8 @@
   .compare-summary-grid,
   .compare-columns,
   .template-admin-grid,
+  .admin-grid,
+  .admin-account-form,
   .template-editor form,
   .teacher-desk .assignment-form,
   .student-create-form {
