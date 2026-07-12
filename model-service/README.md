@@ -43,6 +43,8 @@ export BACKEND_CALLBACK_URL=http://localhost:8080/internal/ai-callback
 uvicorn app.main:app --port 8000
 ```
 
+被教师结束的任务会通过 `${AI_REDIS_QUEUE}:cancelled` 标记；worker 取到尚未开始执行的任务时会跳过它。
+
 Queue payloads should be JSON objects matching `/score`:
 
 ```json

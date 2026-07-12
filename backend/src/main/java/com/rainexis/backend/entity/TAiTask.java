@@ -44,7 +44,7 @@ public class TAiTask implements Serializable {
     @TableField("model_name")
     private String modelName;
 
-    /** 任务执行状态：pending（等待）/ running（执行中）/ success（成功）/ failed（失败） */
+    /** 任务执行状态：pending（等待）/ running（执行中）/ success（成功）/ failed（失败）/ cancelled（已结束） */
     @ApiModelProperty("pending/running/success/failed")
     @TableField("status")
     private String status;

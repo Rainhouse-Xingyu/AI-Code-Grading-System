@@ -24,6 +24,7 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "deepseek").lower()
 ENABLE_REMOTE = os.getenv("AI_ENABLE_REMOTE", "false").lower() == "true"
 REDIS_URL = os.getenv("REDIS_URL", "")
 REDIS_QUEUE = os.getenv("AI_REDIS_QUEUE", "ai:grading:tasks")
+REDIS_CANCELLED_TASKS = f"{REDIS_QUEUE}:cancelled"
 BACKEND_CALLBACK_URL = os.getenv("BACKEND_CALLBACK_URL", "")
 WORKER_ENABLED = os.getenv("WORKER_ENABLED", "false").lower() == "true"
 DEEPSEEK_TIMEOUT_SECONDS = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "600"))
@@ -176,6 +177,10 @@ async def redis_worker() -> None:
             try:
                 payload = json.loads(raw_payload)
                 request = ScoreRequest(**payload)
+                if await client.sismember(REDIS_CANCELLED_TASKS, str(request.task_id)):
+                    logger.info("Skip cancelled grading task_id=%s", request.task_id)
+                    await client.srem(REDIS_CANCELLED_TASKS, str(request.task_id))
+                    continue
                 result = await score(request)
                 await post_callback(
                     {

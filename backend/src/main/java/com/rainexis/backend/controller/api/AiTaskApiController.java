@@ -85,7 +85,7 @@ public class AiTaskApiController {
                 .filter(task -> task.getSubmissionId() == null || accessControlService.canTeacherAccessSubmission(task.getSubmissionId()))
                 .toList();
         Map<String, Long> statusCounts = new LinkedHashMap<>();
-        for (String status : List.of("pending", "running", "success", "failed")) {
+        for (String status : List.of("pending", "running", "success", "failed", "cancelled")) {
             statusCounts.put(status, tasks.stream().filter(task -> status.equals(task.getStatus())).count());
         }
         String latestBatchId = tasks.stream()
@@ -97,7 +97,7 @@ public class AiTaskApiController {
                 ? List.of()
                 : tasks.stream().filter(task -> latestBatchId.equals(task.getBatchId())).toList();
         Map<String, Long> latestBatchCounts = new LinkedHashMap<>();
-        for (String status : List.of("pending", "running", "success", "failed")) {
+        for (String status : List.of("pending", "running", "success", "failed", "cancelled")) {
             latestBatchCounts.put(status, latestBatchTasks.stream().filter(task -> status.equals(task.getStatus())).count());
         }
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -110,6 +110,14 @@ public class AiTaskApiController {
         payload.put("latestBatchTotal", latestBatchTasks.size());
         payload.put("latestBatchCounts", latestBatchCounts);
         return ApiResponse.ok(payload);
+    }
+
+    /** 结束当前作业最近一批仍在等待或执行中的 AI 评分任务 */
+    @PostMapping("/cancel-current")
+    public ApiResponse<List<TAiTask>> cancelCurrent(@RequestParam(name = "assignment_id") Long assignmentId) {
+        AuthContext.requireTeacher();
+        accessControlService.requireAssignmentAccess(assignmentId);
+        return ApiResponse.ok(aiScoringService.cancelCurrentBatch(assignmentId));
     }
 
     /** 重试失败的AI评分任务 */

@@ -96,5 +96,6 @@ python3 -m py_compile inference-service/app/main.py
 - `GET /api/v1/assignments/{id}/download-all` 下载当前作业全部学生代码和评分报告 ZIP。
 - `GET /api/v1/assignments/{id}/download-selected?studentIds=...` 下载勾选学生代码和评分报告 ZIP。
 - `POST /api/v1/ai-tasks/batch-score` 教师批量发起评分。
+- `POST /api/v1/ai-tasks/cancel-current?assignment_id={id}` 结束当前作业最近一批未完成的评分任务。
 - `GET /api/v1/ai-tasks/{id}/logs` 查看任务执行日志。
 - `POST /api/v1/exports/pdf/batch` 批量导出 PDF ZIP。

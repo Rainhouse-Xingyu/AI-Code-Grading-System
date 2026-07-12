@@ -214,6 +214,55 @@ public class AiScoringService {
         return dispatcherEnabled() ? taskMapper.selectById(taskId) : processTask(taskId);
     }
 
+    /**
+     * 结束当前作业最近一批仍在等待或执行中的任务。
+     * 已经完成的任务不受影响；执行中的任务即使稍后返回，也会在回调/落库前被忽略。
+     */
+    public List<TAiTask> cancelCurrentBatch(Long assignmentId) {
+        List<TAiTask> activeTasks = taskMapper.selectList(new LambdaQueryWrapper<TAiTask>()
+                .eq(TAiTask::getAssignmentId, assignmentId)
+                .in(TAiTask::getStatus, "pending", "running")
+                .orderByDesc(TAiTask::getCreatedAt));
+        String batchId = activeTasks.stream()
+                .map(TAiTask::getBatchId)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
+        boolean legacyBatch = batchId.isBlank() && !activeTasks.isEmpty()
+                && (activeTasks.get(0).getBatchId() == null || activeTasks.get(0).getBatchId().isBlank());
+        if (batchId.isBlank() && !legacyBatch) {
+            return List.of();
+        }
+
+        List<TAiTask> cancelledTasks = new ArrayList<>();
+        for (TAiTask task : activeTasks) {
+            boolean sameBatch = legacyBatch
+                    ? task.getBatchId() == null || task.getBatchId().isBlank()
+                    : batchId.equals(task.getBatchId());
+            if (!sameBatch) {
+                continue;
+            }
+            TAiTask update = new TAiTask();
+            update.setStatus("cancelled");
+            update.setEndTime(LocalDateTime.now());
+            update.setErrorMessage("教师已结束当前 AI 评分任务");
+            int updated = taskMapper.update(update, new LambdaQueryWrapper<TAiTask>()
+                    .eq(TAiTask::getId, task.getId())
+                    .in(TAiTask::getStatus, "pending", "running"));
+            if (updated <= 0) {
+                continue;
+            }
+            task.setStatus("cancelled");
+            task.setEndTime(update.getEndTime());
+            task.setErrorMessage(update.getErrorMessage());
+            cancelledTasks.add(task);
+            markCancelledInQueue(task.getId());
+            restoreSubmissionAfterCancellation(task.getSubmissionId());
+            log(task, "WARN", "教师已结束 AI 评分任务，结果将被忽略", task.getModelName(), durationMs(task));
+        }
+        return cancelledTasks;
+    }
+
     /** 同步执行单个AI评分任务：获取代码结构+评分标准 → 调AI → 保存报告 */
     public TAiTask processTask(Long taskId) {
         return processTask(taskId, false);
@@ -223,6 +272,9 @@ public class AiScoringService {
         TAiTask task = taskMapper.selectById(taskId);
         if (task == null) {
             throw BusinessException.notFound("AI 任务不存在");
+        }
+        if (isCancelled(task)) {
+            return task;
         }
         task.setStatus("running");
         task.setStartTime(LocalDateTime.now());
@@ -241,6 +293,9 @@ public class AiScoringService {
                 throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
             }
             if (queueEnabled()) {
+                if (isCancelled(task)) {
+                    return taskMapper.selectById(task.getId());
+                }
                 pushQueue(task, submission, structure, rubric, jointReview ? previousReportMarkdown(submission) : "");
                 return taskMapper.selectById(task.getId());
             }
@@ -252,6 +307,9 @@ public class AiScoringService {
             );
             logProgress(task, "模型返回结果，开始校验评分结构");
             validateResult(result, rubric.getRubricJson());
+            if (isCancelled(task)) {
+                return taskMapper.selectById(task.getId());
+            }
             logProgress(task, "评分结构校验通过，写入 AI 报告");
             TAiReport report = saveReport(task, result);
             logFallbackReason(task, result, report.getModelName());
@@ -268,6 +326,9 @@ public class AiScoringService {
             log(task, "INFO", "AI 评分任务执行成功", report.getModelName(), durationMs(task));
             return task;
         } catch (Exception ex) {
+            if (isCancelled(task)) {
+                return taskMapper.selectById(task.getId());
+            }
             task.setStatus("failed");
             task.setErrorMessage(ex.getMessage());
             task.setEndTime(LocalDateTime.now());
@@ -288,6 +349,10 @@ public class AiScoringService {
         if (task == null) {
             throw BusinessException.notFound("AI 任务不存在");
         }
+        if (isCancelled(task)) {
+            log(task, "WARN", "AI 服务回调已忽略：任务已被教师结束", task.getModelName(), durationMs(task));
+            return task;
+        }
         TSubmission submission = submissionMapper.selectById(task.getSubmissionId());
         if ("success".equals(status)) {
             try {
@@ -300,6 +365,9 @@ public class AiScoringService {
                 TRubric rubric = activeRubric(task.getAssignmentId());
                 validateCallbackDimensionCoverage(result, rubric.getRubricJson());
                 validateResult(result, rubric.getRubricJson());
+                if (isCancelled(task)) {
+                    return taskMapper.selectById(task.getId());
+                }
                 TAiReport report = saveReport(task, result);
                 logFallbackReason(task, result, report.getModelName());
                 task.setStatus("success");
@@ -316,6 +384,9 @@ public class AiScoringService {
                 }
                 return task;
             } catch (Exception ex) {
+                if (isCancelled(task)) {
+                    return taskMapper.selectById(task.getId());
+                }
                 task.setStatus("failed");
                 task.setErrorMessage(ex.getMessage());
                 task.setEndTime(LocalDateTime.now());
@@ -328,6 +399,9 @@ public class AiScoringService {
                 throw new BusinessException(500, "AI 回调结果保存失败: " + ex.getMessage());
             }
         }
+        if (isCancelled(task)) {
+            return taskMapper.selectById(task.getId());
+        }
         task.setStatus("failed");
         task.setErrorMessage(errorMessage == null ? "AI 服务回调失败" : errorMessage);
         task.setEndTime(LocalDateTime.now());
@@ -338,6 +412,40 @@ public class AiScoringService {
             submissionMapper.updateById(submission);
         }
         return task;
+    }
+
+    private boolean isCancelled(TAiTask task) {
+        if ("cancelled".equals(task.getStatus())) {
+            return true;
+        }
+        if (task.getId() == null) {
+            return false;
+        }
+        TAiTask latest = taskMapper.selectById(task.getId());
+        return latest != null && "cancelled".equals(latest.getStatus());
+    }
+
+    private void restoreSubmissionAfterCancellation(Long submissionId) {
+        if (submissionId == null) {
+            return;
+        }
+        TSubmission submission = submissionMapper.selectById(submissionId);
+        if (submission == null || !"scoring".equals(submission.getStatus())) {
+            return;
+        }
+        submission.setStatus(submission.getCurrentReportId() == null ? "parsed" : "scored");
+        submissionMapper.updateById(submission);
+    }
+
+    private void markCancelledInQueue(Long taskId) {
+        if (!queueEnabled() || redisTemplate == null || taskId == null) {
+            return;
+        }
+        try {
+            redisTemplate.opsForSet().add(redisQueue() + ":cancelled", String.valueOf(taskId));
+        } catch (Exception ignored) {
+            // 数据库状态已标记为 cancelled；Redis 标记失败时，回调仍会被后端忽略。
+        }
     }
 
     /** 获取作业的当前激活评分标准（最新版本） */

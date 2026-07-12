@@ -184,7 +184,16 @@
         <template #header>
           <div class="card-head">
             <span>AI 任务</span>
-            <el-tag v-if="scoringPolling" size="small" type="warning">轮询中</el-tag>
+            <div class="toolbar">
+              <el-tag v-if="scoringPolling" size="small" type="warning">轮询中</el-tag>
+              <el-button
+                v-if="canCancelCurrentScoring"
+                size="small"
+                type="danger"
+                :loading="cancellingScoring"
+                @click="cancelCurrentScoring"
+              >结束当前评分</el-button>
+            </div>
           </div>
         </template>
         <div v-if="taskProgress" class="task-progress-grid">
@@ -193,6 +202,7 @@
           <MetricCard label="执行中" :value="`${taskProgress.statusCounts?.running || 0}/${taskProgress.maxConcurrentTasks || 0}`" />
           <MetricCard label="已完成" :value="taskProgress.statusCounts?.success || 0" />
           <MetricCard label="失败" :value="taskProgress.statusCounts?.failed || 0" />
+          <MetricCard label="已结束" :value="taskProgress.statusCounts?.cancelled || 0" />
         </div>
         <el-progress
           v-if="taskProgress?.latestBatchTotal"
@@ -676,6 +686,7 @@ const manualIssueRows = ref([]);
 const jointReviewEnabled = ref(false);
 const scoringWatchIds = ref([]);
 const scoringPolling = ref(false);
+const cancellingScoring = ref(false);
 const packageDownloading = ref(false);
 const packageDownloadProgress = ref(0);
 let scoringPollTimer = null;
@@ -803,9 +814,12 @@ const latestBatchPercent = computed(() => {
   const total = Number(taskProgress.value?.latestBatchTotal || 0);
   if (!total) return 0;
   const counts = taskProgress.value?.latestBatchCounts || {};
-  const done = Number(counts.success || 0) + Number(counts.failed || 0);
+  const done = Number(counts.success || 0) + Number(counts.failed || 0) + Number(counts.cancelled || 0);
   return Math.min(100, Math.round((done / total) * 100));
 });
+const canCancelCurrentScoring = computed(() =>
+  tasks.value.some((task) => ["pending", "running"].includes(task.status))
+);
 watch(dimensionTotal, (value) => {
   if (dimensionScores.value.length) {
     finalScore.value = value.toFixed(2);
@@ -1596,11 +1610,14 @@ async function checkScoringProgress() {
     refreshTokenStats();
     const watched = nextTasks.filter((task) => scoringWatchIds.value.includes(task.id));
     if (!watched.length) return;
-    const done = watched.filter((task) => ["success", "failed"].includes(task.status));
+    const done = watched.filter((task) => ["success", "failed", "cancelled"].includes(task.status));
     if (done.length === scoringWatchIds.value.length) {
       stopScoringPolling();
       const failed = done.filter((task) => task.status === "failed").length;
-      if (failed) {
+      const cancelled = done.filter((task) => task.status === "cancelled").length;
+      if (cancelled) {
+        ElMessage.warning(`AI 评分已结束，${cancelled} 个未完成任务已停止`);
+      } else if (failed) {
         ElMessage.warning(`AI 评分完成，${failed} 个任务失败`);
       } else {
         ElMessage.success("AI 评分已全部完成");
@@ -1609,6 +1626,39 @@ async function checkScoringProgress() {
   } catch (error) {
     stopScoringPolling(false);
     ElMessage.error(messageOf(error));
+  }
+}
+
+async function cancelCurrentScoring() {
+  if (!selectedAssignment.value || !canCancelCurrentScoring.value || cancellingScoring.value) return;
+  try {
+    await ElMessageBox.confirm(
+      "确认结束当前批次的 AI 评分？等待中的任务将不再执行，执行中的结果会被忽略；已完成任务不受影响。",
+      "结束当前 AI 评分",
+      {
+        type: "warning",
+        confirmButtonText: "确认结束",
+        cancelButtonText: "继续评分"
+      }
+    );
+    cancellingScoring.value = true;
+    const cancelledTasks = await props.api.post(
+      `/api/v1/ai-tasks/cancel-current?assignment_id=${selectedAssignment.value}`,
+      {}
+    );
+    stopScoringPolling();
+    await refreshSubmissions();
+    if (cancelledTasks?.length) {
+      ElMessage.success(`已结束当前 AI 评分，停止 ${cancelledTasks.length} 个未完成任务`);
+    } else {
+      ElMessage.info("当前没有可结束的 AI 评分任务");
+    }
+  } catch (error) {
+    if (error !== "cancel") {
+      ElMessage.error(messageOf(error));
+    }
+  } finally {
+    cancellingScoring.value = false;
   }
 }
 
@@ -1980,6 +2030,7 @@ function taskStatusText(status) {
   if (status === "running") return "执行中";
   if (status === "success") return "成功";
   if (status === "failed") return "失败";
+  if (status === "cancelled") return "已结束";
   return status || "未知";
 }
 
@@ -1987,6 +2038,7 @@ function taskStatusType(status) {
   if (status === "success") return "success";
   if (status === "running") return "warning";
   if (status === "failed") return "danger";
+  if (status === "cancelled") return "info";
   return "info";
 }
 
