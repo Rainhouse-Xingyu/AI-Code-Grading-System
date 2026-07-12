@@ -1464,6 +1464,11 @@ async function startScoring() {
     ElMessage.warning("请先勾选待评分提交");
     return;
   }
+  const publishedRows = scoringSelection.value.filter((row) => row.publishStatus === 1 || row.status === "published");
+  if (publishedRows.length) {
+    ElMessage.warning("已发布成绩不能重新评分，请先撤回成绩");
+    return;
+  }
   scoringPreviewVisible.value = true;
 }
 

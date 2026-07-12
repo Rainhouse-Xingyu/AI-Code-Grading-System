@@ -154,9 +154,6 @@ public class AiScoringService {
             if ("scoring".equals(submission.getStatus())) {
                 throw BusinessException.conflict("提交正在评分中: " + submissionId);
             }
-            if ("reviewed".equals(submission.getStatus())) {
-                throw BusinessException.conflict("提交已完成教师复核，需重新复核前不能再次评分: " + submissionId);
-            }
             if ("published".equals(submission.getStatus())) {
                 throw BusinessException.conflict("成绩已发布，需撤回后才能重新评分: " + submissionId);
             }
