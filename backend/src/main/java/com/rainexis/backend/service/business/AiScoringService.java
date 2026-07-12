@@ -151,8 +151,14 @@ public class AiScoringService {
             if (submission == null || !assignmentId.equals(submission.getAssignmentId())) {
                 throw BusinessException.notFound("提交不存在: " + submissionId);
             }
-            if (List.of("scoring", "scored", "reviewed", "published").contains(submission.getStatus())) {
-                throw BusinessException.conflict("提交已进入评分阶段: " + submissionId);
+            if ("scoring".equals(submission.getStatus())) {
+                throw BusinessException.conflict("提交正在评分中: " + submissionId);
+            }
+            if ("reviewed".equals(submission.getStatus())) {
+                throw BusinessException.conflict("提交已完成教师复核，需重新复核前不能再次评分: " + submissionId);
+            }
+            if ("published".equals(submission.getStatus())) {
+                throw BusinessException.conflict("成绩已发布，需撤回后才能重新评分: " + submissionId);
             }
             TProjectStructure structure = structureMapper.selectById(submission.getProjectStructureId());
             if (structure == null) {
@@ -865,6 +871,9 @@ public class AiScoringService {
         report.setReportMarkdown(result.getOrDefault("report_markdown", "").toString());
         report.setSuggestion(objectMapper.writeValueAsString(result.getOrDefault("issues", List.of())));
         reportMapper.insert(report);
+        reportMapper.delete(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getSubmissionId, task.getSubmissionId())
+                .ne(TAiReport::getId, report.getId()));
         return report;
     }
 

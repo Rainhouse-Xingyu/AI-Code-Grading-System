@@ -445,10 +445,9 @@ class EndToEndWorkflowTests {
         mockMvc.perform(get("/api/v1/ai-reports/{submissionId}/history", submissionId)
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data.length()").value(1))
                 .andExpect(jsonPath("$.data[0].submissionId").value(submissionId))
-                .andExpect(jsonPath("$.data[0].modelName").value("fallback-local"))
-                .andExpect(jsonPath("$.data[1].modelName").value("fallback-local"));
+                .andExpect(jsonPath("$.data[0].modelName").value("fallback-local"));
 
         mockMvc.perform(post("/api/v1/grade-publish/push-all")
                         .header("Authorization", bearer(teacherToken))
@@ -1103,6 +1102,45 @@ class EndToEndWorkflowTests {
                         .header("Authorization", bearer(studentToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(2));
+    }
+
+    @Test
+    void scoredSubmissionCanBeScoredAgainAndReplacesPreviousReport() throws Exception {
+        String teacherToken = registerTeacher("t020", "CS-20");
+        Long assignmentId = createPublishedAssignment(teacherToken, "Rescore Homework", "java");
+        importStudent(teacherToken, "s020", "Olivia", "CS-20");
+        String studentToken = login("s020", "123456");
+        Long submissionId = submitZip(studentToken, assignmentId);
+
+        mockMvc.perform(post("/api/v1/ai-tasks/batch-score")
+                        .header("Authorization", bearer(teacherToken))
+                        .header("X-CSRF-Token", csrf(teacherToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assignmentId":%d,"submissionIds":[%d]}
+                                """.formatted(assignmentId, submissionId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].status").value("success"));
+        TSubmission firstScored = submissionMapper.selectById(submissionId);
+        assertThat(firstScored.getStatus()).isEqualTo("scored");
+        assertThat(firstScored.getCurrentReportId()).isNotNull();
+        Long firstReportId = firstScored.getCurrentReportId();
+
+        mockMvc.perform(post("/api/v1/ai-tasks/batch-score")
+                        .header("Authorization", bearer(teacherToken))
+                        .header("X-CSRF-Token", csrf(teacherToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assignmentId":%d,"submissionIds":[%d]}
+                                """.formatted(assignmentId, submissionId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].status").value("success"));
+
+        TSubmission rescored = submissionMapper.selectById(submissionId);
+        assertThat(rescored.getStatus()).isEqualTo("scored");
+        assertThat(rescored.getCurrentReportId()).isNotEqualTo(firstReportId);
+        assertThat(reportMapper.selectCount(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getSubmissionId, submissionId))).isEqualTo(1);
     }
 
     @Test
