@@ -855,9 +855,7 @@ async function refreshSubmissions() {
       props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
       props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);
-    submissions.value = nextSubmissions;
-    scoringSelection.value = keepRowsById(scoringSelection.value, nextSubmissions);
-    downloadSelection.value = keepRowsById(downloadSelection.value, nextSubmissions);
+    await replaceSubmissionRows(nextSubmissions);
     await syncSubmissionTableSelections();
     tasks.value = nextTasks;
     assignmentStats.value = nextStats;
@@ -1294,6 +1292,20 @@ function keepRowsById(selectedRows, nextRows) {
   return nextRows.filter((row) => selectedIds.has(String(row.id)));
 }
 
+async function replaceSubmissionRows(nextRows) {
+  const previousScoringSelection = scoringSelection.value;
+  const previousDownloadSelection = downloadSelection.value;
+  syncingSubmissionSelection = true;
+  try {
+    submissions.value = nextRows;
+    scoringSelection.value = keepRowsById(previousScoringSelection, nextRows);
+    downloadSelection.value = keepRowsById(previousDownloadSelection, nextRows);
+    await nextTick();
+  } finally {
+    syncingSubmissionSelection = false;
+  }
+}
+
 async function syncSubmissionTableSelections() {
   await nextTick();
   syncingSubmissionSelection = true;
@@ -1576,9 +1588,7 @@ async function checkScoringProgress() {
       props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
     ]);
     tasks.value = nextTasks;
-    submissions.value = nextSubmissions;
-    scoringSelection.value = keepRowsById(scoringSelection.value, nextSubmissions);
-    downloadSelection.value = keepRowsById(downloadSelection.value, nextSubmissions);
+    await replaceSubmissionRows(nextSubmissions);
     await syncSubmissionTableSelections();
     assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
