@@ -23,15 +23,18 @@ public class AccessControlService {
     private final TSubmissionMapper submissionMapper;
     private final TUserMapper userMapper;
     private final AssignmentClassService assignmentClassService;
+    private final SemesterService semesterService;
 
     public AccessControlService(TAssignmentMapper assignmentMapper,
                                 TSubmissionMapper submissionMapper,
                                 TUserMapper userMapper,
-                                AssignmentClassService assignmentClassService) {
+                                AssignmentClassService assignmentClassService,
+                                SemesterService semesterService) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
         this.assignmentClassService = assignmentClassService;
+        this.semesterService = semesterService;
     }
 
     /** 校验当前用户是管理员且是作业发布管理者。普通教师不能创建、编辑、发布作业。 */
@@ -67,6 +70,7 @@ public class AccessControlService {
         if (assignment == null || !"published".equals(assignment.getStatus())) {
             throw BusinessException.notFound("作业不存在或未发布");
         }
+        semesterService.requireActive(assignment.getSemesterId());
         if (!assignmentClassService.includesClass(assignment, AuthContext.get().className())) {
             throw BusinessException.forbidden("只能查看本班作业");
         }

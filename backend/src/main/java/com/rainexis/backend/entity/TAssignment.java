@@ -85,6 +85,10 @@ public class TAssignment implements Serializable {
     @TableField("normalized_rubric_json")
     private String normalizedRubricJson;
 
+    /** 所属学期 */
+    @TableField("semester_id")
+    private Long semesterId;
+
     /** 作业状态：draft（草稿）/ published（已发布）/ closed（已关闭） */
     @ApiModelProperty("draft/published/closed")
     @TableField("status")

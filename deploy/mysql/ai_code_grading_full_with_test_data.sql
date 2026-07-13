@@ -29,6 +29,8 @@ DROP TABLE IF EXISTS `t_submission`;
 DROP TABLE IF EXISTS `t_file`;
 DROP TABLE IF EXISTS `t_assignment_class`;
 DROP TABLE IF EXISTS `t_assignment`;
+DROP TABLE IF EXISTS `t_semester_student`;
+DROP TABLE IF EXISTS `t_semester`;
 DROP TABLE IF EXISTS `t_user`;
 
 CREATE TABLE `t_user` (
@@ -70,11 +72,31 @@ CREATE TABLE `t_assignment` (
   `rubric_template_id` bigint DEFAULT NULL,
   `selected_rubric_item_ids` longtext,
   `normalized_rubric_json` longtext,
+  `semester_id` bigint DEFAULT NULL,
   `status` varchar(20) DEFAULT 'draft',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_assignment_teacher` (`teacher_id`),
   KEY `idx_assignment_class` (`class_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `t_semester` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'active',
+  `created_by` bigint DEFAULT NULL,
+  `archived_at` datetime DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_semester_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `t_semester_student` (
+  `semester_id` bigint NOT NULL,
+  `student_id` bigint NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`semester_id`, `student_id`),
+  KEY `idx_semester_student_student` (`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `t_assignment_class` (
@@ -299,13 +321,19 @@ VALUES
   (302, 'a002', '$2a$10$4d9Fsu3t2gYDgDkbBIal8uOXoiTSwAz9p1lkMif1su3UYRYRz6mJ.', 'student', '褚二', 'a002@example.edu.cn', '13900000302', 'AI-1', 1, 0, 0),
   (303, 'a003', '$2a$10$4d9Fsu3t2gYDgDkbBIal8uOXoiTSwAz9p1lkMif1su3UYRYRz6mJ.', 'student', '卫三', 'a003@example.edu.cn', '13900000303', 'AI-1', 1, 0, 0);
 
+INSERT INTO `t_semester` (`id`, `name`, `status`)
+VALUES (1, '当前学期', 'active');
+
+INSERT INTO `t_semester_student` (`semester_id`, `student_id`)
+SELECT 1, `id` FROM `t_user` WHERE `role` = 'student';
+
 INSERT INTO `t_assignment`
-  (`id`, `title`, `course_name`, `description`, `teacher_id`, `language`, `class_name`, `start_time`, `end_time`, `late_policy`, `late_penalty_percent`, `status`)
+  (`id`, `title`, `course_name`, `description`, `teacher_id`, `language`, `class_name`, `start_time`, `end_time`, `late_policy`, `late_penalty_percent`, `semester_id`, `status`)
 VALUES
-  (1, 'Java OOP Homework', 'Java程序设计', '请上传 zip 格式代码包，入口类需可运行。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 14 DAY), 'forbid', 0, 'published'),
-  (2, 'Python Data Homework', 'Python数据处理', '完成数据处理脚本并打包提交。', 2, 'python', 'CS-2', NOW(), DATE_ADD(NOW(), INTERVAL 10 DAY), 'allow_mark', 0, 'published'),
-  (3, 'AI Algorithm Homework', '人工智能算法', '实现一个简单搜索或分类算法。', 3, 'python', 'AI-1', NOW(), DATE_ADD(NOW(), INTERVAL 21 DAY), 'allow_penalty', 10, 'published'),
-  (4, 'CS-1 Draft Assignment', 'Java程序设计', '草稿作业，学生暂不可见。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), 'forbid', 0, 'draft');
+  (1, 'Java OOP Homework', 'Java程序设计', '请上传 zip 格式代码包，入口类需可运行。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 14 DAY), 'forbid', 0, 1, 'published'),
+  (2, 'Python Data Homework', 'Python数据处理', '完成数据处理脚本并打包提交。', 2, 'python', 'CS-2', NOW(), DATE_ADD(NOW(), INTERVAL 10 DAY), 'allow_mark', 0, 1, 'published'),
+  (3, 'AI Algorithm Homework', '人工智能算法', '实现一个简单搜索或分类算法。', 3, 'python', 'AI-1', NOW(), DATE_ADD(NOW(), INTERVAL 21 DAY), 'allow_penalty', 10, 1, 'published'),
+  (4, 'CS-1 Draft Assignment', 'Java程序设计', '草稿作业，学生暂不可见。', 1, 'java', 'CS-1', NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), 'forbid', 0, 1, 'draft');
 
 INSERT INTO `t_assignment_class`
   (`assignment_id`, `class_name`)

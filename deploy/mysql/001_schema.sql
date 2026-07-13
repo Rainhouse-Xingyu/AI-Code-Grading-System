@@ -40,11 +40,31 @@ CREATE TABLE IF NOT EXISTS `t_assignment` (
   `rubric_template_id` bigint DEFAULT NULL,
   `selected_rubric_item_ids` longtext,
   `normalized_rubric_json` longtext,
+  `semester_id` bigint DEFAULT NULL,
   `status` varchar(20) DEFAULT 'draft',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_assignment_teacher` (`teacher_id`),
   KEY `idx_assignment_class` (`class_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS `t_semester` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'active',
+  `created_by` bigint DEFAULT NULL,
+  `archived_at` datetime DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_semester_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS `t_semester_student` (
+  `semester_id` bigint NOT NULL,
+  `student_id` bigint NOT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`semester_id`, `student_id`),
+  KEY `idx_semester_student_student` (`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS `t_assignment_class` (
@@ -255,5 +275,19 @@ ON DUPLICATE KEY UPDATE
   `need_password_change` = 0,
   `login_fail_count` = 0,
   `locked_until` = NULL;
+
+INSERT INTO `t_semester` (`name`, `status`)
+SELECT '当前学期', 'active'
+WHERE NOT EXISTS (SELECT 1 FROM `t_semester` WHERE `status` = 'active');
+
+UPDATE `t_assignment`
+SET `semester_id` = (SELECT `id` FROM `t_semester` WHERE `status` = 'active' ORDER BY `id` DESC LIMIT 1)
+WHERE `semester_id` IS NULL;
+
+INSERT IGNORE INTO `t_semester_student` (`semester_id`, `student_id`)
+SELECT s.`id`, u.`id`
+FROM `t_semester` s
+JOIN `t_user` u ON u.`role` = 'student'
+WHERE s.`status` = 'active';
 
 SET FOREIGN_KEY_CHECKS = 1;

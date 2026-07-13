@@ -31,6 +31,7 @@ public class DatabaseMigrationConfig {
         widenAssignmentClassName();
         ensureUserColumns();
         ensureAssignmentRubricColumns();
+        ensureSemesterTables();
         ensureAiTaskColumns();
         normalizeFallbackTokenUsage();
         removeLegacySuperAdmin();
@@ -54,6 +55,42 @@ public class DatabaseMigrationConfig {
         addColumnIfMissing("t_assignment", "rubric_template_id", "BIGINT");
         addColumnIfMissing("t_assignment", "selected_rubric_item_ids", "LONGTEXT");
         addColumnIfMissing("t_assignment", "normalized_rubric_json", "LONGTEXT");
+    }
+
+    private void ensureSemesterTables() {
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS t_semester (
+                  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                  name VARCHAR(100) NOT NULL,
+                  status VARCHAR(20) NOT NULL DEFAULT 'active',
+                  created_by BIGINT,
+                  archived_at TIMESTAMP NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS t_semester_student (
+                  semester_id BIGINT NOT NULL,
+                  student_id BIGINT NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  PRIMARY KEY (semester_id, student_id)
+                )
+                """);
+        addColumnIfMissing("t_assignment", "semester_id", "BIGINT");
+        Integer total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM t_semester", Integer.class);
+        if (total != null && total == 0) {
+            jdbcTemplate.update("INSERT INTO t_semester (name, status) VALUES (?, 'active')", "当前学期");
+        }
+        Long semesterId = jdbcTemplate.queryForObject("SELECT id FROM t_semester WHERE status = 'active' ORDER BY created_at DESC LIMIT 1", Long.class);
+        if (semesterId != null) {
+            jdbcTemplate.update("UPDATE t_assignment SET semester_id = ? WHERE semester_id IS NULL", semesterId);
+            jdbcTemplate.update("""
+                    INSERT INTO t_semester_student (semester_id, student_id)
+                    SELECT ?, u.id FROM t_user u
+                    WHERE u.role = 'student'
+                      AND NOT EXISTS (SELECT 1 FROM t_semester_student ss WHERE ss.semester_id = ? AND ss.student_id = u.id)
+                    """, semesterId, semesterId);
+        }
     }
 
     private void ensureAiTaskColumns() {

@@ -27,6 +27,7 @@ import com.rainexis.backend.service.business.AssignmentClassService;
 import com.rainexis.backend.service.business.AssignmentDownloadService;
 import com.rainexis.backend.service.business.RubricDimensionItemService;
 import com.rainexis.backend.service.business.ScoreSheetExportService;
+import com.rainexis.backend.service.business.SemesterService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -76,6 +77,7 @@ public class AssignmentApiController {
     private final AssignmentDownloadService assignmentDownloadService;
     private final RubricDimensionItemService dimensionItemService;
     private final ScoreSheetExportService scoreSheetExportService;
+    private final SemesterService semesterService;
     private final ObjectMapper objectMapper;
 
     public AssignmentApiController(TAssignmentMapper assignmentMapper,
@@ -95,6 +97,7 @@ public class AssignmentApiController {
                                    AssignmentDownloadService assignmentDownloadService,
                                    RubricDimensionItemService dimensionItemService,
                                    ScoreSheetExportService scoreSheetExportService,
+                                   SemesterService semesterService,
                                    ObjectMapper objectMapper) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
@@ -113,15 +116,19 @@ public class AssignmentApiController {
         this.assignmentDownloadService = assignmentDownloadService;
         this.dimensionItemService = dimensionItemService;
         this.scoreSheetExportService = scoreSheetExportService;
+        this.semesterService = semesterService;
         this.objectMapper = objectMapper;
     }
 
     @GetMapping
-    public ApiResponse<List<TAssignment>> list(@RequestParam(name = "class_id", required = false) String classId) {
+    public ApiResponse<List<TAssignment>> list(@RequestParam(name = "class_id", required = false) String classId,
+                                               @RequestParam(name = "semesterId", required = false) Long semesterId) {
         AuthUser current = AuthContext.get();
+        Long resolvedSemesterId = semesterId == null ? semesterService.current().getId() : semesterId;
         if (current.isStudent()) {
             List<TAssignment> assignments = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>()
                     .eq(TAssignment::getStatus, "published")
+                    .eq(TAssignment::getSemesterId, resolvedSemesterId)
                     .orderByDesc(TAssignment::getCreatedAt));
             return ApiResponse.ok(assignmentClassService.attachClassNames(assignments.stream()
                     .filter(assignment -> assignmentClassService.includesClass(assignment, current.className()))
@@ -129,6 +136,7 @@ public class AssignmentApiController {
                     .toList()));
         }
         List<TAssignment> assignments = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>()
+                .eq(TAssignment::getSemesterId, resolvedSemesterId)
                 .orderByDesc(TAssignment::getCreatedAt));
         if (!"admin".equals(current.role())) {
             assignments = assignments.stream()
@@ -157,6 +165,7 @@ public class AssignmentApiController {
         assignment.setLanguage(request.language());
         assignment.setClassName(String.join(",", classNames));
         assignment.setTeacherId(AuthContext.get().id());
+        assignment.setSemesterId(semesterService.current().getId());
         assignment.setStartTime(request.startTime());
         assignment.setEndTime(request.endTime());
         assignment.setLatePolicy(latePolicy(request.latePolicy()));
@@ -177,6 +186,7 @@ public class AssignmentApiController {
     public ApiResponse<TAssignment> update(@PathVariable Long id, @RequestBody AssignmentRequest request) {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
+        semesterService.requireActive(assignment.getSemesterId());
         if ("published".equals(assignment.getStatus())) {
             assignment.setCourseName(cleanText(request == null ? null : request.courseName()));
             assignment.setDescription(request == null ? null : request.description());
@@ -230,7 +240,8 @@ public class AssignmentApiController {
     @DeleteMapping("/{id}")
     public ApiResponse<Map<String, Object>> delete(@PathVariable Long id) {
         AuthContext.requireAdmin();
-        accessControlService.requireAssignmentOwner(id);
+        TAssignment assignment = accessControlService.requireAssignmentOwner(id);
+        semesterService.requireActive(assignment.getSemesterId());
         List<TSubmission> submissions = submissionMapper.selectList(new LambdaQueryWrapper<TSubmission>()
                 .eq(TSubmission::getAssignmentId, id));
         List<Long> submissionIds = submissions.stream().map(TSubmission::getId).toList();

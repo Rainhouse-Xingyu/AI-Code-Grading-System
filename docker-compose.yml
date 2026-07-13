@@ -9,7 +9,7 @@ services:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./deploy/mysql/ai_code_grading_full_with_test_data.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./deploy/mysql/001_schema.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]

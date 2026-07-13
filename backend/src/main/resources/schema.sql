@@ -35,8 +35,25 @@ CREATE TABLE IF NOT EXISTS t_assignment (
   rubric_template_id BIGINT,
   selected_rubric_item_ids LONGTEXT,
   normalized_rubric_json LONGTEXT,
+  semester_id BIGINT,
   status VARCHAR(20) DEFAULT 'draft',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS t_semester (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_by BIGINT,
+  archived_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS t_semester_student (
+  semester_id BIGINT NOT NULL,
+  student_id BIGINT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (semester_id, student_id)
 );
 
 CREATE TABLE IF NOT EXISTS t_assignment_class (

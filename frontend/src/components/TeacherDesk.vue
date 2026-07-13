@@ -3,9 +3,16 @@
     <div class="page-heading">
       <div>
         <h2>教师工作台</h2>
-        <p>{{ teacherSubtitle }} · 作业、评分与发布</p>
+        <p>{{ teacherSubtitle }} · {{ selectedSemester?.name || "未选择学期" }} · 作业、评分与发布</p>
       </div>
-      <el-button @click="refreshAssignments">刷新</el-button>
+      <div class="toolbar">
+        <el-select v-model="selectedSemesterId" size="small" placeholder="选择学期" style="width: 160px" @change="changeSemester">
+          <el-option v-for="semester in semesters" :key="semester.id" :label="`${semester.name}${semester.status === 'archived' ? '（已归档）' : ''}`" :value="semester.id" />
+        </el-select>
+        <el-button size="small" @click="createSemester">新建学期</el-button>
+        <el-button size="small" type="warning" :disabled="selectedSemester?.status !== 'active'" @click="archiveSemester">归档本学期</el-button>
+        <el-button @click="refreshAll">刷新</el-button>
+      </div>
     </div>
 
     <div class="teacher-module-content">
@@ -40,12 +47,14 @@
             <el-button type="success">导入学生 Excel</el-button>
           </el-upload>
           <el-button type="warning" :disabled="!canResetFilteredStudents" @click="resetAllStudentPasswords">重置密码</el-button>
+          <el-button type="danger" :disabled="!studentSelection.length" @click="deleteSelectedStudents">删除所选</el-button>
           <el-button :disabled="!rubric" @click="rubricPreviewVisible = true">预览 Rubric</el-button>
         </div>
         <div class="upload-progress-stack">
           <el-progress v-if="studentUploadProgress > 0 && studentUploadProgress < 100" :percentage="studentUploadProgress" />
         </div>
-        <el-table :data="filteredStudents" height="160" class="student-table">
+        <el-table :data="filteredStudents" height="160" class="student-table" @selection-change="studentSelection = $event">
+          <el-table-column type="selection" width="48" />
           <el-table-column prop="username" label="学号" min-width="100" />
           <el-table-column prop="realName" label="姓名" min-width="90" />
           <el-table-column prop="className" label="班级" min-width="110" />
@@ -698,6 +707,9 @@ const tasks = ref([]);
 const taskLogs = ref([]);
 const taskProgress = ref(null);
 const students = ref([]);
+const semesters = ref([]);
+const selectedSemesterId = ref(null);
+const studentSelection = ref([]);
 const rubricTemplates = ref([]);
 const rubricTemplateItems = ref([]);
 const activeTeacherModule = computed(() => props.activeModule || "assignments");
@@ -788,6 +800,7 @@ const manualScoreTotal = computed(() =>
   manualScoreRows.value.reduce((sum, item) => sum + Number(item.score || 0), 0)
 );
 const isAdmin = computed(() => props.user.role === "admin");
+const selectedSemester = computed(() => semesters.value.find((item) => item.id === selectedSemesterId.value) || null);
 const teacherSubtitle = computed(() => {
   const parts = [];
   if (props.user.college) parts.push(props.user.college);
@@ -857,7 +870,8 @@ watch(dimensionTotal, (value) => {
   }
 });
 
-onMounted(() => {
+onMounted(async () => {
+  await refreshSemesters();
   refreshAssignments();
   refreshStudents();
   refreshRubricTemplates();
@@ -879,7 +893,8 @@ watch(selectedAssignment, () => {
 
 async function refreshAssignments() {
   try {
-    assignments.value = await props.api.get("/api/v1/assignments");
+    const query = selectedSemesterId.value ? `?semesterId=${selectedSemesterId.value}` : "";
+    assignments.value = await props.api.get(`/api/v1/assignments${query}`);
     if (!selectedAssignment.value && assignments.value[0]) {
       selectedAssignment.value = assignments.value[0].id;
     }
@@ -961,9 +976,71 @@ async function refreshActiveRubric() {
 
 async function refreshStudents() {
   try {
-    students.value = await props.api.get("/api/v1/users/students");
+    const query = selectedSemesterId.value ? `?semesterId=${selectedSemesterId.value}` : "";
+    students.value = await props.api.get(`/api/v1/users/students${query}`);
+    studentSelection.value = [];
   } catch (error) {
     ElMessage.error(messageOf(error));
+  }
+}
+
+async function refreshSemesters() {
+  try {
+    semesters.value = await props.api.get("/api/v1/semesters");
+    if (!selectedSemesterId.value) {
+      selectedSemesterId.value = semesters.value.find((item) => item.status === "active")?.id || semesters.value[0]?.id || null;
+    }
+  } catch (error) {
+    ElMessage.error(messageOf(error));
+  }
+}
+
+function refreshAll() {
+  refreshAssignments();
+  refreshStudents();
+  refreshRubricTemplates();
+  refreshTokenQuota();
+  refreshTokenStats();
+}
+
+function changeSemester() {
+  selectedAssignment.value = null;
+  refreshAssignments();
+  refreshStudents();
+}
+
+async function createSemester() {
+  try {
+    const { value } = await ElMessageBox.prompt("请输入新学期名称，例如：2026-2027 学年第一学期", "新建学期", {
+      inputPlaceholder: "学期名称",
+      confirmButtonText: "创建",
+      cancelButtonText: "取消"
+    });
+    const semester = await props.api.post("/api/v1/semesters", { name: value });
+    await refreshSemesters();
+    selectedSemesterId.value = semester.id;
+    changeSemester();
+    ElMessage.success("新学期已创建");
+  } catch (error) {
+    if (error !== "cancel") ElMessage.error(messageOf(error));
+  }
+}
+
+async function archiveSemester() {
+  if (!selectedSemester.value) return;
+  try {
+    await ElMessageBox.confirm(`确认归档“${selectedSemester.value.name}”？归档后仅可查看该学期历史数据。`, "归档学期", {
+      type: "warning",
+      confirmButtonText: "确认归档",
+      cancelButtonText: "取消"
+    });
+    await props.api.post(`/api/v1/semesters/${selectedSemester.value.id}/archive`, {});
+    await refreshSemesters();
+    selectedSemesterId.value = semesters.value.find((item) => item.status === "active")?.id || selectedSemesterId.value;
+    changeSemester();
+    ElMessage.success("学期已归档，请新建下一个学期后继续使用");
+  } catch (error) {
+    if (error !== "cancel") ElMessage.error(messageOf(error));
   }
 }
 
@@ -1457,6 +1534,22 @@ async function resetAllStudentPasswords() {
     if (error !== "cancel") {
       ElMessage.error(messageOf(error));
     }
+  }
+}
+
+async function deleteSelectedStudents() {
+  const count = studentSelection.value.length;
+  try {
+    await ElMessageBox.confirm(
+      `确认彻底删除所选 ${count} 名学生？其账号、提交、评分记录和上传文件都会永久删除，无法恢复。`,
+      "彻底删除学生",
+      { type: "error", confirmButtonText: "确认删除", cancelButtonText: "取消" }
+    );
+    const result = await props.api.delete("/api/v1/users/students", { studentIds: studentSelection.value.map((student) => student.id) });
+    await refreshStudents();
+    ElMessage.success(`已彻底删除 ${result.deletedCount || 0} 名学生`);
+  } catch (error) {
+    if (error !== "cancel") ElMessage.error(messageOf(error));
   }
 }
 

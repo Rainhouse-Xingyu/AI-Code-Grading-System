@@ -19,10 +19,11 @@ export function createApi(token, csrfToken = "", handlers = {}) {
         headers: { ...authHeaders(), ...csrfHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify(body)
       })),
-    delete: (url) =>
+    delete: (url, body) =>
       withRefresh(() => request(url, {
         method: "DELETE",
-        headers: { ...authHeaders(), ...csrfHeaders() }
+        headers: { ...authHeaders(), ...csrfHeaders(), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
       })),
     patch: (url, body = {}) =>
       withRefresh(() => request(url, {

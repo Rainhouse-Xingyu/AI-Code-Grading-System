@@ -5,10 +5,13 @@ import com.rainexis.backend.common.ApiResponse;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TUser;
 import com.rainexis.backend.mapper.TUserMapper;
+import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.security.PasswordService;
 import com.rainexis.backend.security.SensitiveDataService;
 import com.rainexis.backend.service.business.AccessControlService;
+import com.rainexis.backend.service.business.SemesterService;
+import com.rainexis.backend.service.business.SubmissionCleanupService;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +30,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -48,15 +52,24 @@ public class UserApiController {
     private final PasswordService passwordService;
     private final AccessControlService accessControlService;
     private final SensitiveDataService sensitiveDataService;
+    private final SemesterService semesterService;
+    private final SubmissionCleanupService submissionCleanupService;
+    private final TSubmissionMapper submissionMapper;
 
     public UserApiController(TUserMapper userMapper,
                              PasswordService passwordService,
                              AccessControlService accessControlService,
-                             SensitiveDataService sensitiveDataService) {
+                             SensitiveDataService sensitiveDataService,
+                             SemesterService semesterService,
+                             SubmissionCleanupService submissionCleanupService,
+                             TSubmissionMapper submissionMapper) {
         this.userMapper = userMapper;
         this.passwordService = passwordService;
         this.accessControlService = accessControlService;
         this.sensitiveDataService = sensitiveDataService;
+        this.semesterService = semesterService;
+        this.submissionCleanupService = submissionCleanupService;
+        this.submissionMapper = submissionMapper;
     }
 
     /** 获取当前登录用户的个人信息 */
@@ -105,6 +118,7 @@ public class UserApiController {
     public ApiResponse<Map<String, Object>> batchImport(@RequestParam MultipartFile file) {
         AuthContext.requireTeacher();
         ensureExcelFile(file);
+        Long semesterId = semesterService.current().getId();
         List<TUser> imported = new ArrayList<>();
         List<Map<String, Object>> successRows = new ArrayList<>();
         List<Map<String, Object>> skippedRows = new ArrayList<>();
@@ -138,8 +152,29 @@ public class UserApiController {
                     failedRows.add(importResult(rowNumber, username, "failed", "学生隐私凭证不能为空且至少 6 位"));
                     continue;
                 }
-                if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username)) > 0) {
-                    skippedRows.add(importResult(rowNumber, username, "skipped", "学号已存在"));
+                TUser existing = userMapper.selectOne(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username));
+                if (existing != null) {
+                    if (!"student".equals(existing.getRole())) {
+                        skippedRows.add(importResult(rowNumber, username, "skipped", "该学号已被非学生账号使用"));
+                        continue;
+                    }
+                    if (semesterService.isStudentEnrolled(semesterId, existing.getId())) {
+                        skippedRows.add(importResult(rowNumber, username, "skipped", "该学期学号已存在"));
+                        continue;
+                    }
+                    String className = studentClassName(importedClassName);
+                    existing.setRealName(realName);
+                    existing.setClassName(className);
+                    existing.setIdCardEncrypted(sensitiveDataService.encrypt(idCardNo));
+                    existing.setPassword(passwordService.encode(initialPasswordFromIdCard(idCardNo)));
+                    existing.setNeedPasswordChange(true);
+                    existing.setLoginFailCount(0);
+                    existing.setLockedUntil(null);
+                    existing.setTokenVersion(nextTokenVersion(existing));
+                    existing.setUpdatedAt(LocalDateTime.now());
+                    userMapper.updateById(existing);
+                    semesterService.enrollStudent(semesterId, existing.getId());
+                    successRows.add(importResult(rowNumber, username, "success", "已加入当前学期并重置密码"));
                     continue;
                 }
                 TUser student = new TUser();
@@ -159,6 +194,7 @@ public class UserApiController {
                 student.setTokenVersion(0);
                 student.setCreatedAt(LocalDateTime.now());
                 userMapper.insert(student);
+                semesterService.enrollStudent(semesterId, student.getId());
                 imported.add(student);
                 successRows.add(importResult(rowNumber, username, "success", "导入成功"));
             }
@@ -209,15 +245,23 @@ public class UserApiController {
         student.setCreatedAt(LocalDateTime.now());
         student.setUpdatedAt(LocalDateTime.now());
         userMapper.insert(student);
+        semesterService.enrollStudent(semesterService.current().getId(), student.getId());
         return ApiResponse.ok(userPayload(student));
     }
 
     /** 教师查询学生列表（默认只返回本班学生，admin可查看所有） */
     @GetMapping("/students")
     public ApiResponse<List<Map<String, Object>>> students(@RequestParam(name = "class", required = false) String className,
-                                                           @RequestParam(name = "q", required = false) String keyword) {
+                                                           @RequestParam(name = "q", required = false) String keyword,
+                                                           @RequestParam(name = "semesterId", required = false) Long semesterId) {
         AuthContext.requireTeacher();
+        Long resolvedSemesterId = semesterId == null ? semesterService.current().getId() : semesterId;
+        List<Long> enrolledIds = semesterService.studentIds(resolvedSemesterId);
+        if (enrolledIds.isEmpty()) {
+            return ApiResponse.ok(List.of());
+        }
         LambdaQueryWrapper<TUser> query = new LambdaQueryWrapper<TUser>().eq(TUser::getRole, "student");
+        query.in(TUser::getId, enrolledIds);
         String teacherClassName = AuthContext.get().className();
         if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
             if (className != null && !className.isBlank() && !teacherClassName.equals(className)) {
@@ -244,6 +288,31 @@ public class UserApiController {
         return ApiResponse.ok(students);
     }
 
+    /** 彻底删除学生账号以及所有提交、评分和上传文件。 */
+    @DeleteMapping("/students")
+    public ApiResponse<Map<String, Object>> deleteStudents(@RequestBody DeleteStudentsRequest request) {
+        AuthContext.requireTeacher();
+        if (request == null || request.studentIds() == null || request.studentIds().isEmpty()) {
+            throw BusinessException.badRequest("请选择要删除的学生");
+        }
+        int deleted = 0;
+        for (Long studentId : request.studentIds().stream().filter(id -> id != null).distinct().toList()) {
+            TUser student = accessControlService.requireTeacherCanManageStudent(studentId);
+            deleteStudentSubmissions(student.getId());
+            semesterService.removeStudent(student.getId());
+            userMapper.deleteById(student.getId());
+            deleted++;
+        }
+        return ApiResponse.ok(Map.of("deletedCount", deleted));
+    }
+
+    private void deleteStudentSubmissions(Long studentId) {
+        // 通过已有的提交清理服务确保 AI 任务、报告、发布记录与物理文件一并删除。
+        submissionMapper.selectList(new LambdaQueryWrapper<com.rainexis.backend.entity.TSubmission>()
+                .eq(com.rainexis.backend.entity.TSubmission::getStudentId, studentId))
+                .forEach(submissionCleanupService::deleteSubmissionPhysically);
+    }
+
     /** 下载学生批量导入的 Excel 模板 */
     @GetMapping("/import-template")
     public ResponseEntity<byte[]> importTemplate() {
@@ -254,7 +323,7 @@ public class UserApiController {
             header.createCell(0).setCellValue("学号");
             header.createCell(1).setCellValue("姓名");
             header.createCell(2).setCellValue("班级");
-            header.createCell(3).setCellValue("登录凭证");
+            header.createCell(3).setCellValue("身份证号");
             var example = sheet.createRow(1);
             example.createCell(0).setCellValue("2024001");
             example.createCell(1).setCellValue("张三");
@@ -419,6 +488,9 @@ public class UserApiController {
     }
 
     public record ResetAllPasswordRequest(List<Long> studentIds) {
+    }
+
+    public record DeleteStudentsRequest(List<Long> studentIds) {
     }
 
     private ResponseEntity<byte[]> downloadBytes(byte[] bytes, String filename, String contentType) {
