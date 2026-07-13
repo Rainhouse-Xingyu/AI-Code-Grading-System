@@ -5,8 +5,12 @@ import com.rainexis.backend.common.ApiResponse;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TAiLog;
 import com.rainexis.backend.entity.TAiTask;
+import com.rainexis.backend.entity.TSubmission;
+import com.rainexis.backend.entity.TUser;
 import com.rainexis.backend.mapper.TAiLogMapper;
 import com.rainexis.backend.mapper.TAiTaskMapper;
+import com.rainexis.backend.mapper.TSubmissionMapper;
+import com.rainexis.backend.mapper.TUserMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.service.business.AccessControlService;
 import com.rainexis.backend.service.business.AiScoringService;
@@ -14,6 +18,9 @@ import com.rainexis.backend.service.business.AiTaskDispatcherService;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,17 +39,23 @@ public class AiTaskApiController {
     private final AiScoringService aiScoringService;
     private final TAiTaskMapper taskMapper;
     private final TAiLogMapper logMapper;
+    private final TSubmissionMapper submissionMapper;
+    private final TUserMapper userMapper;
     private final AccessControlService accessControlService;
     private final AiTaskDispatcherService dispatcherService;
 
     public AiTaskApiController(AiScoringService aiScoringService,
                                TAiTaskMapper taskMapper,
                                TAiLogMapper logMapper,
+                               TSubmissionMapper submissionMapper,
+                               TUserMapper userMapper,
                                AccessControlService accessControlService,
                                AiTaskDispatcherService dispatcherService) {
         this.aiScoringService = aiScoringService;
         this.taskMapper = taskMapper;
         this.logMapper = logMapper;
+        this.submissionMapper = submissionMapper;
+        this.userMapper = userMapper;
         this.accessControlService = accessControlService;
         this.dispatcherService = dispatcherService;
     }
@@ -63,15 +76,16 @@ public class AiTaskApiController {
     }
 
     @GetMapping
-    public ApiResponse<List<TAiTask>> list(@RequestParam(name = "assignment_id") Long assignmentId) {
+    public ApiResponse<List<Map<String, Object>>> list(@RequestParam(name = "assignment_id") Long assignmentId) {
         AuthContext.requireTeacher();
         accessControlService.requireAssignmentAccess(assignmentId);
-        return ApiResponse.ok(taskMapper.selectList(new LambdaQueryWrapper<TAiTask>()
+        List<TAiTask> tasks = taskMapper.selectList(new LambdaQueryWrapper<TAiTask>()
                 .eq(TAiTask::getAssignmentId, assignmentId)
                 .orderByDesc(TAiTask::getCreatedAt))
                 .stream()
                 .filter(task -> task.getSubmissionId() == null || accessControlService.canTeacherAccessSubmission(task.getSubmissionId()))
-                .toList());
+                .toList();
+        return ApiResponse.ok(taskPayloads(tasks));
     }
 
     @GetMapping("/progress")
@@ -151,6 +165,49 @@ public class AiTaskApiController {
             return;
         }
         accessControlService.requireAssignmentAccess(task.getAssignmentId());
+    }
+
+    /** 为任务列表补充提交学生与文件名，便于按批次追踪每位学生的评分进度。 */
+    private List<Map<String, Object>> taskPayloads(List<TAiTask> tasks) {
+        Set<Long> submissionIds = tasks.stream()
+                .map(TAiTask::getSubmissionId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        Map<Long, TSubmission> submissions = submissionIds.isEmpty() ? Map.of() : submissionMapper.selectBatchIds(submissionIds)
+                .stream()
+                .collect(Collectors.toMap(TSubmission::getId, Function.identity()));
+        Set<Long> studentIds = submissions.values().stream()
+                .map(TSubmission::getStudentId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+        Map<Long, TUser> students = studentIds.isEmpty() ? Map.of() : userMapper.selectBatchIds(studentIds)
+                .stream()
+                .collect(Collectors.toMap(TUser::getId, Function.identity()));
+        return tasks.stream().map(task -> taskPayload(task, submissions.get(task.getSubmissionId()), students)).toList();
+    }
+
+    private Map<String, Object> taskPayload(TAiTask task, TSubmission submission, Map<Long, TUser> students) {
+        TUser student = submission == null ? null : students.get(submission.getStudentId());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("id", task.getId());
+        payload.put("submissionId", task.getSubmissionId());
+        payload.put("assignmentId", task.getAssignmentId());
+        payload.put("batchId", task.getBatchId());
+        payload.put("modelName", task.getModelName());
+        payload.put("status", task.getStatus());
+        payload.put("promptTokens", task.getPromptTokens());
+        payload.put("completionTokens", task.getCompletionTokens());
+        payload.put("totalTokens", task.getTotalTokens());
+        payload.put("errorMessage", task.getErrorMessage());
+        payload.put("retryCount", task.getRetryCount());
+        payload.put("startTime", task.getStartTime());
+        payload.put("endTime", task.getEndTime());
+        payload.put("createdAt", task.getCreatedAt());
+        payload.put("studentId", submission == null ? null : submission.getStudentId());
+        payload.put("studentUsername", student == null ? "" : student.getUsername());
+        payload.put("studentRealName", student == null ? "" : student.getRealName());
+        payload.put("submissionFileName", submission == null ? "" : submission.getFileName());
+        return payload;
     }
 
     public record BatchScoreRequest(Long assignmentId, List<Long> submissionIds, Boolean jointReview) {

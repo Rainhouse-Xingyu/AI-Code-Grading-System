@@ -684,7 +684,8 @@ public class AiScoringService {
         result.put("issues", issues);
         result.put("file_analysis", List.of());
         result.put("report_markdown", markdown);
-        result.put("token_usage", estimateTokens(structureJson, rubricJson, markdown));
+        // 这是确定性的本地兜底，不会向模型服务发出请求；不能把字符数估算当作真实 Token 消耗。
+        result.put("token_usage", 0);
         return result;
     }
 

@@ -32,6 +32,7 @@ public class DatabaseMigrationConfig {
         ensureUserColumns();
         ensureAssignmentRubricColumns();
         ensureAiTaskColumns();
+        normalizeFallbackTokenUsage();
         removeLegacySuperAdmin();
         jdbcTemplate.update("""
                 INSERT INTO t_assignment_class (assignment_id, class_name)
@@ -57,6 +58,19 @@ public class DatabaseMigrationConfig {
 
     private void ensureAiTaskColumns() {
         addColumnIfMissing("t_ai_task", "batch_id", "VARCHAR(64)");
+    }
+
+    /** 旧版本曾把确定性兜底的字符估算写成 Token；兜底没有调用模型，真实用量应为 0。 */
+    private void normalizeFallbackTokenUsage() {
+        int updated = jdbcTemplate.update("""
+                UPDATE t_ai_report
+                SET token_usage = 0
+                WHERE LOWER(COALESCE(model_name, '')) = 'fallback-local'
+                  AND COALESCE(token_usage, 0) <> 0
+                """);
+        if (updated > 0) {
+            log.info("Normalized token usage for {} deterministic fallback reports", updated);
+        }
     }
 
     private void ensureUserColumns() {

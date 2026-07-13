@@ -563,7 +563,8 @@ def fallback_score(request: ScoreRequest) -> dict[str, Any]:
         "issues": issues,
         "file_analysis": [],
         "report_markdown": markdown,
-        "token_usage": max(1, (len(json.dumps(request.model_dump(), ensure_ascii=False)) + len(markdown)) // 4),
+        # Deterministic fallback does not call a model, so it has no real token usage.
+        "token_usage": 0,
     }
     validate_result(result, request.rubric_json)
     return result

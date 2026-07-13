@@ -213,6 +213,13 @@
         <el-table :data="tasks" height="210">
           <el-table-column prop="id" label="任务" width="70" />
           <el-table-column prop="batchId" label="批次" min-width="120" show-overflow-tooltip />
+          <el-table-column label="对应学生作业" min-width="190" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-tooltip :content="taskStudentDetail(row)" placement="top">
+                <span>{{ taskStudentText(row) }}</span>
+              </el-tooltip>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="96">
             <template #default="{ row }">
               <el-tag :type="taskStatusType(row.status)" size="small">{{ taskStatusText(row.status) }}</el-tag>
@@ -354,15 +361,11 @@
                 :value="assignment.id"
               />
             </el-select>
-            <el-button @click="loadReport">查看报告</el-button>
             <el-button @click="loadReportHistory">历史报告</el-button>
-            <el-button @click="openReportCompare">模型对比</el-button>
             <el-button @click="loadReviewHistory">复核历史</el-button>
             <el-button @click="saveReview">保存复核</el-button>
             <el-button type="primary" @click="publishGrades">{{ publishButtonText }}</el-button>
             <el-button type="warning" @click="retractGrades()">撤回成绩</el-button>
-            <el-button @click="downloadSingle">单份 PDF</el-button>
-            <el-button @click="downloadBatch">批量 PDF</el-button>
           </div>
         </div>
       </template>
@@ -2037,6 +2040,16 @@ function taskStatusText(status) {
   if (status === "failed") return "失败";
   if (status === "cancelled") return "已结束";
   return status || "未知";
+}
+
+function taskStudentText(task) {
+  const identity = [task.studentRealName, task.studentUsername].filter(Boolean).join(" · ");
+  return identity || `提交 #${task.submissionId || "--"}`;
+}
+
+function taskStudentDetail(task) {
+  const identity = taskStudentText(task);
+  return task.submissionFileName ? `${identity}：${task.submissionFileName}` : identity;
 }
 
 function taskStatusType(status) {
