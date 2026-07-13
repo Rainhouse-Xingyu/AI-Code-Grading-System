@@ -76,7 +76,35 @@
             <MetricCard label="候选容量" :value="formatBytes(cleanupPreview.candidateBytes)" />
             <MetricCard label="已删文件" :value="cleanupPreview.deletedCount || 0" />
           </div>
-          <el-empty v-else class="cleanup-empty" description="点击预览后显示可清理文件数量和容量" />
+          <el-table
+            v-if="cleanupPreview?.candidateFiles?.length"
+            :data="cleanupPreview.candidateFiles"
+            class="cleanup-file-table"
+            size="small"
+            max-height="220"
+          >
+            <el-table-column prop="fileName" label="文件名" min-width="180" show-overflow-tooltip />
+            <el-table-column label="类型" width="110">
+              <template #default="{ row }">{{ cleanupFileType(row.fileType) }}</template>
+            </el-table-column>
+            <el-table-column label="大小" width="100">
+              <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
+            </el-table-column>
+            <el-table-column prop="createdAt" label="上传时间" min-width="150" />
+            <el-table-column prop="relativePath" label="存储位置" min-width="220" show-overflow-tooltip />
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.pathAllowed ? 'success' : 'warning'" size="small">
+                  {{ row.pathAllowed ? "可清理" : "已跳过" }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty
+            v-else
+            class="cleanup-empty"
+            :description="cleanupPreview ? '没有符合条件的可清理文件' : '点击预览后显示可清理文件明细'"
+          />
         </div>
       </el-card>
         </section>
@@ -2073,6 +2101,15 @@ function formatBytes(value) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
   return `${bytes} B`;
+}
+
+function cleanupFileType(type) {
+  const labels = {
+    submission_zip: "学生提交",
+    rubric_word: "评分文档",
+    rubric_excel: "评分表格"
+  };
+  return labels[type] || type || "未知";
 }
 
 function downloadStudentTemplate() {

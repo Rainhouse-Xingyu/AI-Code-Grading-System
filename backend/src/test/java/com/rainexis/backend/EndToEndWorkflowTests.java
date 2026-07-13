@@ -1014,6 +1014,10 @@ class EndToEndWorkflowTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.dryRun").value(true))
                 .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.candidateFiles[0].fileName").value("cleanup-old.txt"))
+                .andExpect(jsonPath("$.data.candidateFiles[0].fileType").value("submission_zip"))
+                .andExpect(jsonPath("$.data.candidateFiles[0].relativePath").value("cleanup-old.txt"))
+                .andExpect(jsonPath("$.data.candidateFiles[0].pathAllowed").value(true))
                 .andExpect(jsonPath("$.data.deletedCount").value(0));
         assertThat(Files.exists(oldFile)).isTrue();
         assertThat(fileMapper.selectById(record.getId())).isNotNull();

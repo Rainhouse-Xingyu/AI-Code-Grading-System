@@ -81,8 +81,10 @@ public class FileStorageService {
         long totalBytes = 0;
         int deletedFiles = 0;
         List<String> errors = new ArrayList<>();
+        List<Map<String, Object>> candidateFiles = new ArrayList<>();
         for (TFile file : candidates) {
             totalBytes += file.getFileSize() == null ? 0L : file.getFileSize();
+            candidateFiles.add(cleanupCandidate(file));
             if (!execute) {
                 continue;
             }
@@ -105,9 +107,41 @@ public class FileStorageService {
         payload.put("cutoffTime", cutoff);
         payload.put("candidateCount", candidates.size());
         payload.put("candidateBytes", totalBytes);
+        payload.put("candidateFiles", candidateFiles);
         payload.put("deletedCount", deletedFiles);
         payload.put("errors", errors);
         return payload;
+    }
+
+    private Map<String, Object> cleanupCandidate(TFile file) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", file.getId());
+        item.put("fileName", file.getFileName());
+        item.put("storageName", file.getStorageName());
+        item.put("fileType", file.getFileType());
+        item.put("fileSize", file.getFileSize() == null ? 0L : file.getFileSize());
+        item.put("createdAt", file.getCreatedAt());
+        item.put("relativePath", cleanupRelativePath(file.getFileUrl()));
+        item.put("pathAllowed", cleanupPathAllowed(file.getFileUrl()));
+        return item;
+    }
+
+    private String cleanupRelativePath(String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return "";
+        }
+        Path path = Paths.get(fileUrl).toAbsolutePath().normalize();
+        if (path.startsWith(uploadRoot)) {
+            return uploadRoot.relativize(path).toString();
+        }
+        return path.getFileName() == null ? fileUrl : path.getFileName().toString();
+    }
+
+    private boolean cleanupPathAllowed(String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return false;
+        }
+        return Paths.get(fileUrl).toAbsolutePath().normalize().startsWith(uploadRoot);
     }
 
     /** 通用文件存储方法：校验 → 创建目录 → 写入文件 → 记录元数据到数据库 */
