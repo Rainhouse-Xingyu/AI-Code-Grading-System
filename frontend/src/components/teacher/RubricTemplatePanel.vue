@@ -5,6 +5,9 @@
         <div class="card-head">
           <span>评分模板管理</span>
           <div class="toolbar">
+            <a :href="rubricTemplateDownloadUrl" download="评分模板.xlsx" class="template-download-link">
+              <el-button size="small">下载评分模板</el-button>
+            </a>
             <el-upload
               :show-file-list="false"
               :auto-upload="false"
@@ -54,7 +57,7 @@
                 <el-input v-model="row.dimensionName" size="small" />
               </template>
             </el-table-column>
-            <el-table-column label="序号" width="70">
+            <el-table-column label="序号" width="110">
               <template #default="{ row }">
                 <el-input-number v-model="row.dimensionOrder" :min="1" size="small" controls-position="right" />
               </template>
@@ -92,6 +95,8 @@
 </template>
 
 <script setup>
+const rubricTemplateDownloadUrl = `${import.meta.env.BASE_URL}rubric-templates/评分模板.xlsx`;
+
 defineProps({
   rubricTemplates: { type: Array, default: () => [] },
   templateForm: { type: Object, required: true },
