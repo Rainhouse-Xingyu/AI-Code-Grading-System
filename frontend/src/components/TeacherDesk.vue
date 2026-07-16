@@ -1384,6 +1384,7 @@ async function deleteRubricTemplate(row) {
 }
 
 function selectSubmission(row) {
+  if (syncingSubmissionSelection || activeTeacherModule.value !== "submissions") return;
   selectedSubmission.value = row?.id || null;
   report.value = null;
   reportMarkdown.value = "";
