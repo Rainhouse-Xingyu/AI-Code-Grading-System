@@ -21,6 +21,7 @@ uvicorn app.main:app --reload --port 8000
 - `LOCAL_AI_MODEL` defaults to `Qwen2.5-Coder-7B-Instruct`.
 - `LOCAL_AI_API_KEY` is optional for fallback endpoints that require authentication.
 - `REDIS_URL` may include the Redis password, for example `redis://:password@localhost:6379/0`.
+- `AI_WORKER_CONCURRENCY` controls how many Redis grading consumers run in parallel. It defaults to 5 and is limited to 1-10.
 - `DEEPSEEK_TIMEOUT_SECONDS` defaults to 600.
 - `LOCAL_AI_TIMEOUT_SECONDS` defaults to 600.
 - `AI_PROMPT_FULL_CODE_CHAR_LIMIT` defaults to 8000. Projects at or below this size are sent in full.
@@ -44,6 +45,8 @@ uvicorn app.main:app --port 8000
 ```
 
 被教师结束的任务会通过 `${AI_REDIS_QUEUE}:cancelled` 标记；worker 取到尚未开始执行的任务时会跳过它。
+
+Each worker consumes one Redis task at a time, so `AI_WORKER_CONCURRENCY=5` allows up to five model requests to run concurrently. Changing the value requires recreating the model-service process.
 
 Queue payloads should be JSON objects matching `/score`:
 

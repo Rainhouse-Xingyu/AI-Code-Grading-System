@@ -32,13 +32,24 @@
           </el-table-column>
           <el-table-column label="值" min-width="260">
             <template #default="{ row }">
-              <el-input v-model="row.value" :type="row.secret ? 'password' : 'text'" show-password />
+              <el-input-number
+                v-if="row.inputType === 'number'"
+                v-model="row.value"
+                :min="row.min"
+                :max="row.max"
+                :step="1"
+                :precision="0"
+                step-strictly
+                controls-position="right"
+                class="config-number-input"
+              />
+              <el-input v-else v-model="row.value" :type="row.secret ? 'password' : 'text'" show-password />
             </template>
           </el-table-column>
-          <el-table-column label="生效方式" width="110">
+          <el-table-column label="生效方式" width="130">
             <template #default="{ row }">
               <el-tag :type="row.restartRequired ? 'warning' : 'success'" size="small">
-                {{ row.restartRequired ? "需重启" : "立即生效" }}
+                {{ restartLabel(row) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -152,7 +163,8 @@ const configLabels = {
   AI_DISPATCHER_ENABLED: ["AI 调度器开关", "控制后端是否自动领取并执行 AI 评分任务。对应 AI_DISPATCHER_ENABLED。"],
   AI_ENABLE_REMOTE: ["远程 AI 开关", "控制是否允许调用远程模型服务。对应 AI_ENABLE_REMOTE。"],
   AI_MAX_COMPLETION_TOKENS: ["AI 最大输出 Token", "限制模型单次评分返回内容的最大 Token 数。对应 AI_MAX_COMPLETION_TOKENS。"],
-  AI_MAX_CONCURRENT_TASKS: ["并发评分任务数", "控制后台最多同时执行多少个 AI 评分任务。对应 AI_MAX_CONCURRENT_TASKS。"],
+  AI_MAX_CONCURRENT_TASKS: ["后端入队调度并发", "控制后端同时领取并推入 Redis 的任务数，不等同于模型请求并发。对应 AI_MAX_CONCURRENT_TASKS。"],
+  AI_WORKER_CONCURRENCY: ["模型评分并发数", "模型服务同时从 Redis 领取并调用模型的作业数。范围 1～10，推荐 5；保存后需重建 model-service。"],
   AI_MODEL: ["远程模型名称", "远程 AI 服务使用的模型名称。对应 AI_MODEL。"],
   AI_PROVIDER: ["AI 服务提供方", "选择评分优先使用的模型提供方，例如 deepseek 或 local。对应 AI_PROVIDER。"],
   AI_QUEUE_ENABLED: ["AI 队列开关", "控制是否通过 Redis 队列提交评分任务。对应 AI_QUEUE_ENABLED。"],
@@ -197,20 +209,38 @@ async function loadConfig() {
   try {
     const result = await props.api.get("/api/v1/admin/config");
     envPath.value = result.envPath || "";
-    configItems.value = result.items || [];
+    configItems.value = normalizeConfigItems(result.items || []);
   } catch (error) {
     ElMessage.error(messageOf(error));
   }
 }
 
 async function saveConfig() {
+  const invalidNumber = configItems.value.find((item) => {
+    if (item.inputType !== "number") return false;
+    const value = Number(item.value);
+    return !Number.isInteger(value) || value < item.min || value > item.max;
+  });
+  if (invalidNumber) {
+    ElMessage.error(`${configLabel(invalidNumber.key)}必须是 ${invalidNumber.min} 到 ${invalidNumber.max} 之间的整数`);
+    return;
+  }
+  const workerConcurrencyChanged = configItems.value.some(
+    (item) => item.key === "AI_WORKER_CONCURRENCY" && String(item.value) !== String(item.originalValue)
+  );
   configSaving.value = true;
   try {
-    const values = Object.fromEntries(configItems.value.map((item) => [item.key, item.value ?? ""]));
+    const values = Object.fromEntries(
+      configItems.value.map((item) => [item.key, item.value == null ? "" : String(item.value)])
+    );
     const result = await props.api.put("/api/v1/admin/config", { values });
     envPath.value = result.envPath || envPath.value;
-    configItems.value = result.items || configItems.value;
-    ElMessage.success("配置已保存");
+    configItems.value = normalizeConfigItems(result.items || configItems.value);
+    ElMessage.success(
+      workerConcurrencyChanged
+        ? "并发数已保存；请在没有执行中评分任务时重建 model-service 后生效"
+        : "配置已保存"
+    );
   } catch (error) {
     ElMessage.error(messageOf(error));
   } finally {
@@ -312,6 +342,26 @@ function configLabel(key) {
 
 function configDescription(key) {
   return configLabels[key]?.[1] || `系统配置项，对应 ${key}。`;
+}
+
+function normalizeConfigItems(items) {
+  return items.map((item) => {
+    if (item.inputType !== "number") {
+      return { ...item, originalValue: item.value ?? "" };
+    }
+    const rawValue = item.value === "" || item.value == null ? item.defaultValue : item.value;
+    const numberValue = Number(rawValue);
+    return {
+      ...item,
+      value: Number.isFinite(numberValue) ? numberValue : Number(item.defaultValue || item.min || 1),
+      originalValue: Number.isFinite(numberValue) ? numberValue : Number(item.defaultValue || item.min || 1)
+    };
+  });
+}
+
+function restartLabel(row) {
+  if (!row.restartRequired) return "立即生效";
+  return row.key === "AI_WORKER_CONCURRENCY" ? "需重建模型服务" : "需重启";
 }
 
 function emptyAccount() {

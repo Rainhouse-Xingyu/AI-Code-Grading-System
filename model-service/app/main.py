@@ -13,6 +13,17 @@ import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+
+def bounded_int(value: str | None, default: int, minimum: int, maximum: int) -> int:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 # 模型服务配置
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://ai-gateway.neusoft.edu.cn/v1/models")
@@ -27,8 +38,17 @@ REDIS_QUEUE = os.getenv("AI_REDIS_QUEUE", "ai:grading:tasks")
 REDIS_CANCELLED_TASKS = f"{REDIS_QUEUE}:cancelled"
 BACKEND_CALLBACK_URL = os.getenv("BACKEND_CALLBACK_URL", "")
 WORKER_ENABLED = os.getenv("WORKER_ENABLED", "false").lower() == "true"
+WORKER_CONCURRENCY_MIN = 1
+WORKER_CONCURRENCY_MAX = 10
+WORKER_CONCURRENCY = bounded_int(
+    os.getenv("AI_WORKER_CONCURRENCY"),
+    default=5,
+    minimum=WORKER_CONCURRENCY_MIN,
+    maximum=WORKER_CONCURRENCY_MAX,
+)
 DEEPSEEK_TIMEOUT_SECONDS = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "600"))
 DEEPSEEK_RETRY_DELAYS = (3, 10)
+CALLBACK_RETRY_DELAYS = (1, 3)
 LOCAL_MODEL_TIMEOUT_SECONDS = int(os.getenv("LOCAL_AI_TIMEOUT_SECONDS", "600"))
 MAX_COMPLETION_TOKENS = int(os.getenv("AI_MAX_COMPLETION_TOKENS", "8192"))
 PROMPT_FULL_CODE_CHAR_LIMIT = int(os.getenv("AI_PROMPT_FULL_CODE_CHAR_LIMIT", "8000"))
@@ -36,22 +56,38 @@ PROMPT_CORE_CODE_CHAR_LIMIT = int(os.getenv("AI_PROMPT_CORE_CODE_CHAR_LIMIT", "3
 PROMPT_CORE_TARGET_CHARS = int(os.getenv("AI_PROMPT_CORE_TARGET_CHARS", "16000"))
 PROMPT_SUMMARY_MAX_LINES = int(os.getenv("AI_PROMPT_SUMMARY_MAX_LINES", "100"))
 logger = logging.getLogger("ai-code-grading.model-service")
+ACTIVE_WORKER_IDS: set[int] = set()
+RUNNING_WORKER_TASKS: list[asyncio.Task[None]] = []
+HTTP_CLIENT: httpx.AsyncClient | None = None
 
 # FastAPI 生命周期管理器，用于启动和停止后台任务
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    worker_task: asyncio.Task[None] | None = None
+    global HTTP_CLIENT, RUNNING_WORKER_TASKS
+    connection_limit = max(20, WORKER_CONCURRENCY * 4)
+    HTTP_CLIENT = httpx.AsyncClient(
+        timeout=None,
+        limits=httpx.Limits(
+            max_connections=connection_limit,
+            max_keepalive_connections=connection_limit,
+        ),
+    )
     if WORKER_ENABLED and REDIS_URL:
-        worker_task = asyncio.create_task(redis_worker())
+        logger.info("Starting %s Redis grading workers", WORKER_CONCURRENCY)
+        RUNNING_WORKER_TASKS = [
+            asyncio.create_task(redis_worker(worker_id), name=f"redis-grading-worker-{worker_id}")
+            for worker_id in range(1, WORKER_CONCURRENCY + 1)
+        ]
     try:
         yield
     finally:
-        if worker_task:
+        for worker_task in RUNNING_WORKER_TASKS:
             worker_task.cancel()
-            try:
-                await worker_task
-            except asyncio.CancelledError:
-                pass
+        if RUNNING_WORKER_TASKS:
+            await asyncio.gather(*RUNNING_WORKER_TASKS, return_exceptions=True)
+        RUNNING_WORKER_TASKS = []
+        await HTTP_CLIENT.aclose()
+        HTTP_CLIENT = None
 
 # FastAPI 应用实例
 app = FastAPI(title="AI Code Grading Model Service", version="0.1.0", lifespan=lifespan)
@@ -83,7 +119,12 @@ async def health() -> dict[str, Any]:
         "deepseek_url": chat_completions_url(DEEPSEEK_BASE_URL),
         "local_model_url": chat_completions_url(LOCAL_AI_BASE_URL) if LOCAL_AI_BASE_URL else None,
         "worker_enabled": WORKER_ENABLED,
+        "worker_concurrency": WORKER_CONCURRENCY,
+        "worker_concurrency_max": WORKER_CONCURRENCY_MAX,
+        "workers_alive": sum(1 for task in RUNNING_WORKER_TASKS if not task.done()),
+        "active_grading_tasks": len(ACTIVE_WORKER_IDS),
         "redis_configured": bool(REDIS_URL),
+        "callback_configured": bool(BACKEND_CALLBACK_URL),
         "queue": REDIS_QUEUE,
     }
 
@@ -166,48 +207,182 @@ async def callback(payload: CallbackRequest) -> dict[str, Any]:
     return {"accepted": True, "task_id": payload.task_id, "status": payload.status}
 
 # 后台任务函数，用于从 Redis 队列中获取评分任务并处理
-async def redis_worker() -> None:
-    client = redis.from_url(REDIS_URL, decode_responses=True)
-    try:
-        while True:
-            item = await client.brpop(REDIS_QUEUE, timeout=5)
-            if not item:
-                continue
-            _, raw_payload = item
-            try:
-                payload = json.loads(raw_payload)
-                request = ScoreRequest(**payload)
-                if await client.sismember(REDIS_CANCELLED_TASKS, str(request.task_id)):
-                    logger.info("Skip cancelled grading task_id=%s", request.task_id)
-                    await client.srem(REDIS_CANCELLED_TASKS, str(request.task_id))
+async def redis_worker(worker_id: int = 1) -> None:
+    while True:
+        client = None
+        try:
+            client = redis.from_url(REDIS_URL, decode_responses=True)
+            logger.info("Redis grading worker %s is ready", worker_id)
+            while True:
+                item = await client.brpop(REDIS_QUEUE, timeout=5)
+                if not item:
                     continue
-                result = await score(request)
-                await post_callback(
-                    {
-                        "taskId": request.task_id,
-                        "submissionId": request.submission_id,
-                        "status": "success",
-                        "result": result,
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                await post_callback(
-                    {
-                        "taskId": safe_task_id(raw_payload),
-                        "status": "failed",
-                        "errorMessage": exception_message(exc),
-                    }
-                )
+                _, raw_payload = item
+                await process_queue_item(client, raw_payload, worker_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Redis grading worker %s failed; retrying in 3 seconds: %s",
+                worker_id,
+                exception_message(exc),
+            )
+            await asyncio.sleep(3)
+        finally:
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+async def process_queue_item(client: Any, raw_payload: str, worker_id: int) -> None:
+    request: ScoreRequest | None = None
+    try:
+        payload = json.loads(raw_payload)
+        request = ScoreRequest(**payload)
+        if await consume_cancelled_marker(client, request.task_id):
+            logger.info("Worker %s skipped cancelled grading task_id=%s", worker_id, request.task_id)
+            return
+    except Exception as exc:  # noqa: BLE001
+        task_id = request.task_id if request is not None else safe_task_id(raw_payload)
+        logger.warning(
+            "Worker %s could not prepare grading task_id=%s: %s",
+            worker_id,
+            task_id,
+            exception_message(exc),
+        )
+        try:
+            await post_callback_with_retry(
+                {
+                    "taskId": task_id,
+                    "status": "failed",
+                    "errorMessage": exception_message(exc),
+                }
+            )
+        except Exception as callback_exc:  # noqa: BLE001
+            logger.error(
+                "Worker %s could not post failure callback for task_id=%s: %s",
+                worker_id,
+                task_id,
+                exception_message(callback_exc),
+            )
+        return
+
+    ACTIVE_WORKER_IDS.add(worker_id)
+    logger.info(
+        "Worker %s started grading task_id=%s submission_id=%s active=%s/%s",
+        worker_id,
+        request.task_id,
+        request.submission_id,
+        len(ACTIVE_WORKER_IDS),
+        WORKER_CONCURRENCY,
+    )
+    try:
+        result = await score(request)
+    except Exception as exc:  # noqa: BLE001
+        if await consume_cancelled_marker_safely(client, request.task_id):
+            logger.info("Worker %s stopped callback for cancelled task_id=%s", worker_id, request.task_id)
+            return
+        logger.warning(
+            "Worker %s failed grading task_id=%s: %s",
+            worker_id,
+            request.task_id,
+            exception_message(exc),
+        )
+        try:
+            await post_callback_with_retry(
+                {
+                    "taskId": request.task_id,
+                    "status": "failed",
+                    "errorMessage": exception_message(exc),
+                }
+            )
+        except Exception as callback_exc:  # noqa: BLE001
+            logger.error(
+                "Worker %s could not post failure callback for task_id=%s: %s",
+                worker_id,
+                request.task_id,
+                exception_message(callback_exc),
+            )
+        return
     finally:
-        await client.aclose()
+        ACTIVE_WORKER_IDS.discard(worker_id)
+
+    if await consume_cancelled_marker_safely(client, request.task_id):
+        logger.info("Worker %s discarded result for cancelled task_id=%s", worker_id, request.task_id)
+        return
+
+    try:
+        await post_callback_with_retry(
+            {
+                "taskId": request.task_id,
+                "submissionId": request.submission_id,
+                "status": "success",
+                "result": result,
+            }
+        )
+        logger.info("Worker %s completed grading task_id=%s", worker_id, request.task_id)
+    except Exception as callback_exc:  # noqa: BLE001
+        logger.error(
+            "Worker %s completed grading task_id=%s but callback failed after retries: %s",
+            worker_id,
+            request.task_id,
+            exception_message(callback_exc),
+        )
+
+
+async def consume_cancelled_marker(client: Any, task_id: int | None) -> bool:
+    if not await client.sismember(REDIS_CANCELLED_TASKS, str(task_id)):
+        return False
+    try:
+        await client.srem(REDIS_CANCELLED_TASKS, str(task_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not clear cancellation marker for task_id=%s: %s", task_id, exception_message(exc))
+    return True
+
+
+async def consume_cancelled_marker_safely(client: Any, task_id: int | None) -> bool:
+    try:
+        return await consume_cancelled_marker(client, task_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not check cancellation marker for task_id=%s: %s", task_id, exception_message(exc))
+        return False
+
 
 # 异步函数，用于向后端回调接口发送评分结果
 async def post_callback(payload: dict[str, Any]) -> None:
     if not BACKEND_CALLBACK_URL:
-        return
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(BACKEND_CALLBACK_URL, json=payload)
-        response.raise_for_status()
+        raise RuntimeError("BACKEND_CALLBACK_URL is not configured")
+    response = await http_post(BACKEND_CALLBACK_URL, json=payload, timeout=30)
+    response.raise_for_status()
+
+
+async def post_callback_with_retry(payload: dict[str, Any]) -> None:
+    last_error: Exception | None = None
+    for attempt in range(len(CALLBACK_RETRY_DELAYS) + 1):
+        try:
+            await post_callback(payload)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < len(CALLBACK_RETRY_DELAYS):
+                await asyncio.sleep(CALLBACK_RETRY_DELAYS[attempt])
+    if last_error is not None:
+        raise last_error
+
+
+async def http_post(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json: dict[str, Any],
+    timeout: int,
+) -> httpx.Response:
+    if HTTP_CLIENT is not None:
+        return await HTTP_CLIENT.post(url, headers=headers, json=json, timeout=timeout)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        return await client.post(url, headers=headers, json=json)
 
 # 工具函数，用于从原始负载中安全地提取任务 ID
 def safe_task_id(raw_payload: str) -> int | None:
@@ -301,9 +476,8 @@ async def score_with_openai_compatible(
         request_url,
     )
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(request_url, headers=headers, json=body)
-            response.raise_for_status()
+        response = await http_post(request_url, headers=headers, json=body, timeout=timeout)
+        response.raise_for_status()
     except Exception as exc:
         logger.warning(
             "%s request failed task_id=%s submission_id=%s elapsed=%.2fs error=%s",

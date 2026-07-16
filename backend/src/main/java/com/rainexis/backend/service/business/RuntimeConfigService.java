@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class RuntimeConfigService {
+    private static final String AI_WORKER_CONCURRENCY = "AI_WORKER_CONCURRENCY";
+    private static final int AI_WORKER_CONCURRENCY_MIN = 1;
+    private static final int AI_WORKER_CONCURRENCY_MAX = 10;
     private static final Set<String> ALLOWED_KEYS = Set.of(
             "DEEPSEEK_API_KEY",
             "DEEPSEEK_BASE_URL",
@@ -34,6 +37,7 @@ public class RuntimeConfigService {
             "AI_REDIS_QUEUE",
             "AI_DISPATCHER_ENABLED",
             "AI_MAX_CONCURRENT_TASKS",
+            AI_WORKER_CONCURRENCY,
             "AI_DISPATCH_INTERVAL_MS",
             "AI_RUNNING_TIMEOUT_MINUTES",
             "STORAGE_ROOT",
@@ -55,7 +59,8 @@ public class RuntimeConfigService {
             "DB_PASSWORD",
             "REDIS_HOST",
             "REDIS_PORT",
-            "REDIS_PASSWORD"
+            "REDIS_PASSWORD",
+            AI_WORKER_CONCURRENCY
     );
     private static final Set<String> SECRET_KEYS = Set.of(
             "DEEPSEEK_API_KEY",
@@ -88,6 +93,12 @@ public class RuntimeConfigService {
                     item.put("secret", SECRET_KEYS.contains(key));
                     item.put("restartRequired", RESTART_REQUIRED_KEYS.contains(key));
                     item.put("editable", true);
+                    if (AI_WORKER_CONCURRENCY.equals(key)) {
+                        item.put("inputType", "number");
+                        item.put("min", AI_WORKER_CONCURRENCY_MIN);
+                        item.put("max", AI_WORKER_CONCURRENCY_MAX);
+                        item.put("defaultValue", "5");
+                    }
                     return item;
                 })
                 .toList();
@@ -104,6 +115,7 @@ public class RuntimeConfigService {
             }
             cleaned.put(key, value == null ? "" : value.trim());
         });
+        validateUpdates(cleaned);
         Map<String, String> next = new LinkedHashMap<>(values);
         next.putAll(cleaned);
         writeEnvFile(next);
@@ -150,6 +162,21 @@ public class RuntimeConfigService {
 
     public Path envPath() {
         return envPath;
+    }
+
+    private void validateUpdates(Map<String, String> updates) {
+        String workerConcurrency = updates.get(AI_WORKER_CONCURRENCY);
+        if (workerConcurrency == null || workerConcurrency.isBlank()) {
+            return;
+        }
+        try {
+            int value = Integer.parseInt(workerConcurrency);
+            if (value < AI_WORKER_CONCURRENCY_MIN || value > AI_WORKER_CONCURRENCY_MAX) {
+                throw BusinessException.badRequest("模型评分并发数必须是 1 到 10 之间的整数");
+            }
+        } catch (NumberFormatException ex) {
+            throw BusinessException.badRequest("模型评分并发数必须是 1 到 10 之间的整数");
+        }
     }
 
     private Map<String, String> readEnvFile() {

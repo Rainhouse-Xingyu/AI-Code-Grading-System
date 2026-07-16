@@ -67,6 +67,7 @@ docker compose --profile local-inference up --build
 
 - `AI_ENABLE_REMOTE=true` 且设置 `DEEPSEEK_API_KEY` 后，AI 服务优先调用 DeepSeek。
 - `DEEPSEEK_BASE_URL` 可配置为学校模型网关地址，服务会自动拼接 Chat Completions 路径。
+- `AI_WORKER_CONCURRENCY` 控制模型服务同时评分的作业数，默认 `5`，允许范围 `1`～`10`；管理员页保存后需在没有执行中评分任务时重建 `model-service`。
 - `DEEPSEEK_TOKEN_QUOTA` 默认 `12000000`，用于教师端 DeepSeek 配额余量展示。
 - `REDIS_PASSWORD` 会同时传给 Redis、后端和 Python worker。
 - `STORAGE_ROOT` 是后端文件存储根目录，Linux 推荐 `/data/ai-grading`，Windows 可使用 `D:/ai-grading`；Compose 会绑定挂载到容器 `/data/ai-grading`。
@@ -75,6 +76,12 @@ docker compose --profile local-inference up --build
 - `LOCAL_AI_BASE_URL` 可指向局域网 GPU 推理服务的 OpenAI 兼容接口；不要指向 `model-service` 自身端口。
 - `AI_PROMPT_FULL_CODE_CHAR_LIMIT` / `AI_PROMPT_CORE_CODE_CHAR_LIMIT` 默认 `8000` / `30000`，控制评分 Prompt 的代码截取策略；超大项目默认每个文件保留前 `100` 行。
 - `LOCAL_INFERENCE_*` 用于配置仓库内独立 `inference-service`，默认端口为 `8002`；`LOCAL_INFERENCE_MODEL_PATH` 是真实模型路径，`LOCAL_INFERENCE_SERVED_MODEL_NAME` 应与 `LOCAL_AI_MODEL` 一致。
+
+管理员修改模型评分并发数后，等待当前评分任务结束，再执行：
+
+```bash
+docker compose up -d --force-recreate model-service
+```
 
 ## 常用验收命令
 
