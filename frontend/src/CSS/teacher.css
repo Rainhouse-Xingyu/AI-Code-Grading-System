@@ -198,6 +198,12 @@
   padding-top: 14px;
 }
 
+.cleanup-age-label {
+  color: #667085;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .cleanup-empty {
   min-height: 90px;
   border: 1px dashed #d8e0ec;
@@ -242,6 +248,37 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.semester-file-cleanup-dialog {
+  display: grid;
+  min-height: 180px;
+  max-height: 70vh;
+  gap: 14px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.semester-cleanup-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.semester-cleanup-confirm {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #f5c2c7;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff7f7;
+  color: #7a271a;
+  font-size: 13px;
+}
+
+.cleanup-detail-note {
+  color: #667085;
+  font-size: 12px;
 }
 
 .log-box {
@@ -522,7 +559,8 @@
     grid-template-columns: 1fr;
   }
 
-  .cleanup-summary {
+  .cleanup-summary,
+  .semester-cleanup-summary {
     grid-template-columns: 1fr;
   }
 

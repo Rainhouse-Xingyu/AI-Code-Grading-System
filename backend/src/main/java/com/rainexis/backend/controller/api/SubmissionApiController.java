@@ -140,6 +140,13 @@ public class SubmissionApiController {
             submission.setStatus("parse_failed");
             submissionMapper.updateById(submission);
             throw ex;
+        } catch (Exception ex) {
+            submission.setStatus("parse_failed");
+            submissionMapper.updateById(submission);
+            String message = ex.getMessage() == null || ex.getMessage().isBlank()
+                    ? ex.getClass().getSimpleName()
+                    : ex.getMessage();
+            throw new BusinessException(500, "ZIP 解析失败: " + message);
         }
     }
 

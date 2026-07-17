@@ -15,10 +15,13 @@ import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -34,11 +37,15 @@ public class FileStorageService {
     /** 评分标准文件最大为 10MB */
     private static final long MAX_RUBRIC_SIZE = 10L * 1024 * 1024;
     private final TFileMapper fileMapper;
+    private final JdbcTemplate jdbcTemplate;
     /** 文件上传根目录 */
     private final Path uploadRoot;
 
-    public FileStorageService(TFileMapper fileMapper, @Value("${app.storage.root}") String storageRoot) {
+    public FileStorageService(TFileMapper fileMapper,
+                              JdbcTemplate jdbcTemplate,
+                              @Value("${app.storage.root}") String storageRoot) {
         this.fileMapper = fileMapper;
+        this.jdbcTemplate = jdbcTemplate;
         this.uploadRoot = Paths.get(storageRoot).toAbsolutePath().normalize();
     }
 
@@ -78,22 +85,31 @@ public class FileStorageService {
         List<TFile> candidates = fileMapper.selectList(new LambdaQueryWrapper<TFile>()
                 .lt(TFile::getCreatedAt, cutoff)
                 .orderByAsc(TFile::getCreatedAt));
+        Set<String> referencedPaths = referencedFilePaths();
         long totalBytes = 0;
+        int candidateCount = 0;
+        int protectedCount = 0;
         int deletedFiles = 0;
         List<String> errors = new ArrayList<>();
         List<Map<String, Object>> candidateFiles = new ArrayList<>();
         for (TFile file : candidates) {
-            totalBytes += file.getFileSize() == null ? 0L : file.getFileSize();
-            candidateFiles.add(cleanupCandidate(file));
+            Map<String, Object> candidate = cleanupCandidate(file, referencedPaths);
+            candidateFiles.add(candidate);
+            boolean deletable = Boolean.TRUE.equals(candidate.get("deletable"));
+            if (deletable) {
+                candidateCount++;
+                totalBytes += file.getFileSize() == null ? 0L : file.getFileSize();
+            } else {
+                protectedCount++;
+            }
             if (!execute) {
                 continue;
             }
+            if (!deletable) {
+                continue;
+            }
             try {
-                Path path = Paths.get(file.getFileUrl()).toAbsolutePath().normalize();
-                if (!path.startsWith(uploadRoot)) {
-                    errors.add("跳过非法路径: " + file.getFileUrl());
-                    continue;
-                }
+                Path path = requiredCleanupPath(file.getFileUrl());
                 Files.deleteIfExists(path);
                 fileMapper.deleteById(file.getId());
                 deletedFiles++;
@@ -105,15 +121,19 @@ public class FileStorageService {
         payload.put("dryRun", !execute);
         payload.put("olderThanDays", olderThanDays);
         payload.put("cutoffTime", cutoff);
-        payload.put("candidateCount", candidates.size());
+        payload.put("candidateCount", candidateCount);
         payload.put("candidateBytes", totalBytes);
         payload.put("candidateFiles", candidateFiles);
+        payload.put("protectedCount", protectedCount);
         payload.put("deletedCount", deletedFiles);
         payload.put("errors", errors);
         return payload;
     }
 
-    private Map<String, Object> cleanupCandidate(TFile file) {
+    private Map<String, Object> cleanupCandidate(TFile file, Set<String> referencedPaths) {
+        String normalizedPath = normalizedPath(file.getFileUrl());
+        boolean pathAllowed = normalizedPath != null && Paths.get(normalizedPath).startsWith(cleanupRoot());
+        boolean protectedReference = normalizedPath != null && referencedPaths.contains(normalizedPath);
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("id", file.getId());
         item.put("fileName", file.getFileName());
@@ -122,26 +142,74 @@ public class FileStorageService {
         item.put("fileSize", file.getFileSize() == null ? 0L : file.getFileSize());
         item.put("createdAt", file.getCreatedAt());
         item.put("relativePath", cleanupRelativePath(file.getFileUrl()));
-        item.put("pathAllowed", cleanupPathAllowed(file.getFileUrl()));
+        item.put("pathAllowed", pathAllowed);
+        item.put("protectedReference", protectedReference);
+        item.put("deletable", pathAllowed && !protectedReference);
+        item.put("skipReason", !pathAllowed ? "路径不在上传目录" : protectedReference ? "业务记录仍在引用" : null);
         return item;
     }
 
-    private String cleanupRelativePath(String fileUrl) {
+    private Set<String> referencedFilePaths() {
+        Set<String> paths = new LinkedHashSet<>();
+        List<String> fileUrls = jdbcTemplate.queryForList("""
+                SELECT file_url FROM t_submission WHERE file_url IS NOT NULL AND file_url <> ''
+                UNION
+                SELECT file_url FROM t_rubric WHERE file_url IS NOT NULL AND file_url <> ''
+                """, String.class);
+        for (String fileUrl : fileUrls) {
+            String normalized = normalizedPath(fileUrl);
+            if (normalized != null) {
+                paths.add(normalized);
+            }
+        }
+        return paths;
+    }
+
+    private Path requiredCleanupPath(String fileUrl) {
+        String normalized = normalizedPath(fileUrl);
+        if (normalized == null) {
+            throw BusinessException.badRequest("文件路径无效");
+        }
+        Path path = Paths.get(normalized);
+        if (!path.startsWith(cleanupRoot())) {
+            throw BusinessException.badRequest("文件路径不在上传目录");
+        }
+        return path;
+    }
+
+    private String normalizedPath(String fileUrl) {
         if (fileUrl == null || fileUrl.isBlank()) {
+            return null;
+        }
+        try {
+            Path path = Paths.get(fileUrl).toAbsolutePath().normalize();
+            return Files.exists(path)
+                    ? path.toRealPath().toString()
+                    : path.toString();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String cleanupRelativePath(String fileUrl) {
+        String normalized = normalizedPath(fileUrl);
+        if (normalized == null) {
             return "";
         }
-        Path path = Paths.get(fileUrl).toAbsolutePath().normalize();
-        if (path.startsWith(uploadRoot)) {
-            return uploadRoot.relativize(path).toString();
+        Path path = Paths.get(normalized);
+        Path root = cleanupRoot();
+        if (path.startsWith(root)) {
+            return root.relativize(path).toString();
         }
         return path.getFileName() == null ? fileUrl : path.getFileName().toString();
     }
 
-    private boolean cleanupPathAllowed(String fileUrl) {
-        if (fileUrl == null || fileUrl.isBlank()) {
-            return false;
+    private Path cleanupRoot() {
+        try {
+            return Files.exists(uploadRoot) ? uploadRoot.toRealPath() : uploadRoot;
+        } catch (IOException ex) {
+            return uploadRoot;
         }
-        return Paths.get(fileUrl).toAbsolutePath().normalize().startsWith(uploadRoot);
     }
 
     /** 通用文件存储方法：校验 → 创建目录 → 写入文件 → 记录元数据到数据库 */

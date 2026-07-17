@@ -134,7 +134,7 @@ public class ZipStructureService {
             }
         } catch (BusinessException ex) {
             throw ex;
-        } catch (IOException ex) {
+        } catch (IOException | IllegalArgumentException ex) {
             if (isMalformedInput(ex)) {
                 throw BusinessException.badRequest("ZIP 文件名编码异常，请使用 UTF-8 或 GBK/Windows 默认编码重新压缩后上传: " + ex.getMessage());
             }

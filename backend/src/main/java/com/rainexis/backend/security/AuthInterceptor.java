@@ -80,6 +80,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         return path.equals("/api/v1/ai-tasks/batch-score")
                 || path.startsWith("/api/v1/grade-publish/")
                 || path.equals("/api/v1/files/cleanup")
+                || (path.startsWith("/api/v1/semesters/") && path.endsWith("/files/cleanup"))
                 || path.equals("/api/v1/users/batch-import")
                 || path.equals("/api/v1/admin/accounts/import")
                 || path.startsWith("/api/v1/admin/config")

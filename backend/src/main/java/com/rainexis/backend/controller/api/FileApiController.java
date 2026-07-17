@@ -21,13 +21,13 @@ public class FileApiController {
 
     @GetMapping("/cleanup-preview")
     public ApiResponse<Map<String, Object>> cleanupPreview(@RequestParam(defaultValue = "180") int olderThanDays) {
-        AuthContext.requireTeacher();
+        AuthContext.requireAdmin();
         return ApiResponse.ok(fileStorageService.cleanupOlderThan(olderThanDays, false));
     }
 
     @PostMapping("/cleanup")
     public ApiResponse<Map<String, Object>> cleanup(@RequestParam(defaultValue = "180") int olderThanDays) {
-        AuthContext.requireTeacher();
+        AuthContext.requireAdmin();
         return ApiResponse.ok(fileStorageService.cleanupOlderThan(olderThanDays, true));
     }
 }

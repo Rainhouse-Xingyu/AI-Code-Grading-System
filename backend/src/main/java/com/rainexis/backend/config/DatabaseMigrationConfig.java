@@ -1,6 +1,7 @@
 package com.rainexis.backend.config;
 
 import jakarta.annotation.PostConstruct;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -81,16 +82,21 @@ public class DatabaseMigrationConfig {
         if (total != null && total == 0) {
             jdbcTemplate.update("INSERT INTO t_semester (name, status) VALUES (?, 'active')", "当前学期");
         }
-        Long semesterId = jdbcTemplate.queryForObject("SELECT id FROM t_semester WHERE status = 'active' ORDER BY created_at DESC LIMIT 1", Long.class);
-        if (semesterId != null) {
-            jdbcTemplate.update("UPDATE t_assignment SET semester_id = ? WHERE semester_id IS NULL", semesterId);
-            jdbcTemplate.update("""
-                    INSERT INTO t_semester_student (semester_id, student_id)
-                    SELECT ?, u.id FROM t_user u
-                    WHERE u.role = 'student'
-                      AND NOT EXISTS (SELECT 1 FROM t_semester_student ss WHERE ss.semester_id = ? AND ss.student_id = u.id)
-                    """, semesterId, semesterId);
+        List<Long> activeSemesterIds = jdbcTemplate.queryForList(
+                "SELECT id FROM t_semester WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
+                Long.class);
+        if (activeSemesterIds.isEmpty()) {
+            log.info("No active semester found; skipping legacy semester backfill");
+            return;
         }
+        Long semesterId = activeSemesterIds.get(0);
+        jdbcTemplate.update("UPDATE t_assignment SET semester_id = ? WHERE semester_id IS NULL", semesterId);
+        jdbcTemplate.update("""
+                INSERT INTO t_semester_student (semester_id, student_id)
+                SELECT ?, u.id FROM t_user u
+                WHERE u.role = 'student'
+                  AND NOT EXISTS (SELECT 1 FROM t_semester_student ss WHERE ss.semester_id = ? AND ss.student_id = u.id)
+                """, semesterId, semesterId);
     }
 
     private void ensureAiTaskColumns() {

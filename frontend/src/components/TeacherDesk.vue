@@ -11,6 +11,16 @@
         </el-select>
         <el-button size="small" @click="createSemester">新建学期</el-button>
         <el-button size="small" type="warning" :disabled="selectedSemester?.status !== 'active'" @click="archiveSemester">归档本学期</el-button>
+        <el-button
+          v-if="isAdmin && selectedSemester?.status === 'archived'"
+          size="small"
+          type="danger"
+          plain
+          :loading="semesterFileCleanupLoading"
+          @click="openSemesterFileCleanup"
+        >
+          清理归档文件
+        </el-button>
         <el-button @click="refreshAll">刷新</el-button>
       </div>
     </div>
@@ -69,17 +79,39 @@
           <MetricCard label="作业" :value="assignments.length" />
           <MetricCard label="Rubric" :value="rubric ? '已配置' : '待选择'" />
         </div>
-        <div class="storage-cleanup-panel">
+        <div v-if="isAdmin" class="storage-cleanup-panel">
           <div class="card-head">
             <span>文件清理</span>
             <div class="toolbar">
-              <el-input-number v-model="cleanupOlderThanDays" :min="1" :max="3650" size="small" />
-              <el-button size="small" @click="previewFileCleanup">预览</el-button>
-              <el-button size="small" type="danger" :disabled="!cleanupPreview?.candidateCount" @click="executeFileCleanup">
+              <span class="cleanup-age-label">超过</span>
+              <el-input-number
+                v-model="cleanupOlderThanDays"
+                :min="1"
+                :max="3650"
+                size="small"
+                :disabled="cleanupPreviewLoading || cleanupExecuting"
+                @change="resetCleanupPreview"
+              />
+              <span class="cleanup-age-label">天</span>
+              <el-button size="small" :loading="cleanupPreviewLoading" @click="previewFileCleanup">预览</el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :loading="cleanupExecuting"
+                :disabled="cleanupPreviewLoading || cleanupExecuting || !cleanupPreviewIsCurrent || !cleanupPreview?.candidateCount"
+                @click="executeFileCleanup"
+              >
                 清理
               </el-button>
             </div>
           </div>
+          <el-alert
+            v-if="cleanupPreview"
+            :title="cleanupPreviewMessage"
+            :type="cleanupPreview.candidateCount ? 'warning' : 'success'"
+            :closable="false"
+            show-icon
+          />
           <div v-if="cleanupPreview" class="cleanup-summary">
             <MetricCard label="候选文件" :value="cleanupPreview.candidateCount" />
             <MetricCard label="候选容量" :value="formatBytes(cleanupPreview.candidateBytes)" />
@@ -103,8 +135,8 @@
             <el-table-column prop="relativePath" label="存储位置" min-width="220" show-overflow-tooltip />
             <el-table-column label="状态" width="90">
               <template #default="{ row }">
-                <el-tag :type="row.pathAllowed ? 'success' : 'warning'" size="small">
-                  {{ row.pathAllowed ? "可清理" : "已跳过" }}
+                <el-tag :type="row.deletable ? 'success' : 'warning'" size="small">
+                  {{ row.deletable ? "可清理" : row.skipReason || "已跳过" }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -498,6 +530,111 @@
         </section>
       </div>
 
+    <el-dialog
+      v-model="semesterFileCleanupVisible"
+      :title="`清理归档学期文件${semesterFileCleanupTarget?.name ? `：${semesterFileCleanupTarget.name}` : ''}`"
+      width="min(880px, 94vw)"
+      :close-on-click-modal="!semesterFileCleanupExecuting"
+      :close-on-press-escape="!semesterFileCleanupExecuting"
+      :show-close="!semesterFileCleanupExecuting"
+      @closed="resetSemesterFileCleanup"
+    >
+      <div v-loading="semesterFileCleanupLoading" class="semester-file-cleanup-dialog">
+        <el-alert
+          title="只删除原始提交 ZIP 和该学期的旧评分附件；学期、作业、提交信息、解析代码、AI 报告、复核和成绩记录都会保留。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+        <el-alert
+          v-if="semesterFileCleanupResult"
+          :title="`上次清理已删除 ${semesterFileCleanupResult.deletedCount || 0} 个文件（${formatBytes(semesterFileCleanupResult.deletedBytes)}）`"
+          :description="semesterCleanupErrorSummary"
+          :type="semesterFileCleanupResult.errors?.length ? 'warning' : 'success'"
+          :closable="false"
+          show-icon
+        />
+        <template v-if="semesterFileCleanupPreview">
+          <div class="semester-cleanup-summary">
+            <MetricCard label="可删除文件" :value="semesterFileCleanupPreview.candidateCount || 0" />
+            <MetricCard label="可释放容量" :value="formatBytes(semesterFileCleanupPreview.candidateBytes)" />
+            <MetricCard label="提交 ZIP" :value="semesterFileCleanupPreview.submissionZipCount || 0" />
+            <MetricCard label="旧评分附件" :value="semesterFileCleanupPreview.rubricFileCount || 0" />
+          </div>
+          <el-alert
+            v-if="semesterFileCleanupPreview.unrecoverableSubmissionCount"
+            :title="`${semesterFileCleanupPreview.unrecoverableSubmissionCount} 份提交没有可用于重建代码包的解析结构，删除原始 ZIP 后将无法恢复其文件内容。`"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+          <el-table
+            v-if="semesterFileCleanupPreview.candidateFiles?.length"
+            :data="semesterFileCleanupPreview.candidateFiles"
+            size="small"
+            border
+            max-height="280"
+          >
+            <el-table-column prop="fileName" label="文件名" min-width="240" show-overflow-tooltip />
+            <el-table-column label="类型" width="110">
+              <template #default="{ row }">{{ semesterCleanupFileType(row.fileType) }}</template>
+            </el-table-column>
+            <el-table-column label="大小" width="100">
+              <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="130">
+              <template #default="{ row }">
+                <el-tag :type="row.deletable ? 'danger' : row.exists ? 'warning' : 'info'" size="small">
+                  {{ row.deletable ? "将删除" : row.skipReason || "已跳过" }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p v-if="semesterFileCleanupPreview.detailsTruncated" class="cleanup-detail-note">
+            文件较多，明细仅展示前 200 条，统计和清理范围包含全部文件。
+          </p>
+          <el-empty
+            v-if="!semesterFileCleanupPreview.candidateCount"
+            description="该归档学期没有可删除的原始文件"
+          />
+          <div v-else class="semester-cleanup-confirm">
+            <span>
+              此操作不可撤销。请输入学期名称
+              <strong>{{ semesterFileCleanupTarget?.name }}</strong>
+              以确认：
+            </span>
+            <el-input
+              v-model="semesterFileCleanupConfirmation"
+              :placeholder="semesterFileCleanupTarget?.name"
+              clearable
+            />
+            <el-checkbox
+              v-if="semesterFileCleanupPreview.unrecoverableSubmissionCount"
+              v-model="semesterFileCleanupUnrecoverableConfirmed"
+            >
+              我确认这 {{ semesterFileCleanupPreview.unrecoverableSubmissionCount }} 份提交删除后无法恢复原始文件内容
+            </el-checkbox>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button :disabled="semesterFileCleanupExecuting" @click="semesterFileCleanupVisible = false">关闭</el-button>
+        <el-button
+          type="danger"
+          :loading="semesterFileCleanupExecuting"
+          :disabled="
+            semesterFileCleanupLoading
+            || semesterFileCleanupExecuting
+            || !semesterFileCleanupConfirmMatches
+            || !semesterFileCleanupPreview?.candidateCount
+          "
+          @click="executeSemesterFileCleanup"
+        >
+          确认删除原始文件
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="scoringPreviewVisible" title="确认评分列表" width="720px">
       <el-table :data="scoringSelection" height="300">
         <el-table-column prop="studentUsername" label="学号" width="120" />
@@ -716,6 +853,17 @@ const activeTeacherModule = computed(() => props.activeModule || "assignments");
 const studentUploadProgress = ref(0);
 const cleanupOlderThanDays = ref(180);
 const cleanupPreview = ref(null);
+const cleanupPreviewLoading = ref(false);
+const cleanupExecuting = ref(false);
+const cleanupPreviewedOlderThanDays = ref(null);
+const semesterFileCleanupVisible = ref(false);
+const semesterFileCleanupLoading = ref(false);
+const semesterFileCleanupExecuting = ref(false);
+const semesterFileCleanupTarget = ref(null);
+const semesterFileCleanupPreview = ref(null);
+const semesterFileCleanupResult = ref(null);
+const semesterFileCleanupConfirmation = ref("");
+const semesterFileCleanupUnrecoverableConfirmed = ref(false);
 const scoringTable = ref(null);
 const downloadTable = ref(null);
 const scoringSelection = ref([]);
@@ -732,7 +880,42 @@ const scoringPolling = ref(false);
 const cancellingScoring = ref(false);
 const packageDownloading = ref(false);
 const packageDownloadProgress = ref(0);
+const cleanupPreviewMessage = computed(() => {
+  if (!cleanupPreview.value) return "";
+  const candidateCount = Number(cleanupPreview.value.candidateCount || 0);
+  if (cleanupPreview.value.dryRun === false) {
+    return `清理完成：已删除 ${Number(cleanupPreview.value.deletedCount || 0)} 个文件`;
+  }
+  const olderThanDays = cleanupPreviewedOlderThanDays.value ?? cleanupOlderThanDays.value;
+  return candidateCount > 0
+    ? `预览完成：找到 ${candidateCount} 个超过 ${olderThanDays} 天的文件`
+    : `预览完成：没有超过 ${olderThanDays} 天的可清理文件`;
+});
+const cleanupPreviewIsCurrent = computed(() =>
+  Boolean(
+    cleanupPreview.value?.dryRun
+    && cleanupPreviewedOlderThanDays.value === Number(cleanupOlderThanDays.value)
+  )
+);
+const semesterFileCleanupConfirmMatches = computed(() =>
+  Boolean(
+    semesterFileCleanupTarget.value?.name
+    && semesterFileCleanupConfirmation.value.trim() === semesterFileCleanupTarget.value.name
+    && (
+      !semesterFileCleanupPreview.value?.unrecoverableSubmissionCount
+      || semesterFileCleanupUnrecoverableConfirmed.value
+    )
+  )
+);
+const semesterCleanupErrorSummary = computed(() => {
+  const errors = semesterFileCleanupResult.value?.errors || [];
+  if (!errors.length) return "";
+  const summary = errors.slice(0, 3).join("；");
+  return errors.length > 3 ? `${summary}；另有 ${errors.length - 3} 项失败` : summary;
+});
 let scoringPollTimer = null;
+let cleanupPreviewRequestId = 0;
+let semesterFileCleanupRequestId = 0;
 let syncingSubmissionSelection = false;
 const tokenQuota = ref(null);
 const tokenStats = ref(null);
@@ -1004,6 +1187,8 @@ function refreshAll() {
 }
 
 function changeSemester() {
+  semesterFileCleanupVisible.value = false;
+  resetSemesterFileCleanup();
   selectedAssignment.value = null;
   refreshAssignments();
   refreshStudents();
@@ -1042,6 +1227,93 @@ async function archiveSemester() {
   } catch (error) {
     if (error !== "cancel") ElMessage.error(messageOf(error));
   }
+}
+
+async function openSemesterFileCleanup() {
+  if (!isAdmin.value || selectedSemester.value?.status !== "archived") {
+    ElMessage.warning("请先选择已归档学期");
+    return;
+  }
+  if (semesterFileCleanupLoading.value || semesterFileCleanupExecuting.value) return;
+  resetSemesterFileCleanup();
+  semesterFileCleanupTarget.value = { ...selectedSemester.value };
+  semesterFileCleanupVisible.value = true;
+  await refreshSemesterFileCleanupPreview();
+}
+
+async function refreshSemesterFileCleanupPreview() {
+  const semesterId = semesterFileCleanupTarget.value?.id;
+  if (!semesterId) return;
+  const requestId = ++semesterFileCleanupRequestId;
+  semesterFileCleanupLoading.value = true;
+  semesterFileCleanupPreview.value = null;
+  semesterFileCleanupUnrecoverableConfirmed.value = false;
+  try {
+    const preview = await props.api.get(`/api/v1/semesters/${semesterId}/files/cleanup-preview`);
+    if (
+      requestId !== semesterFileCleanupRequestId
+      || semesterFileCleanupTarget.value?.id !== semesterId
+      || !semesterFileCleanupVisible.value
+    ) {
+      return false;
+    }
+    semesterFileCleanupPreview.value = preview;
+    return true;
+  } catch (error) {
+    if (requestId === semesterFileCleanupRequestId && semesterFileCleanupVisible.value) {
+      ElMessage.error(messageOf(error));
+    }
+    return false;
+  } finally {
+    if (requestId === semesterFileCleanupRequestId) {
+      semesterFileCleanupLoading.value = false;
+    }
+  }
+}
+
+async function executeSemesterFileCleanup() {
+  const semesterId = semesterFileCleanupTarget.value?.id;
+  if (
+    semesterFileCleanupExecuting.value
+    || semesterFileCleanupLoading.value
+    || !semesterId
+    || !semesterFileCleanupConfirmMatches.value
+    || !semesterFileCleanupPreview.value?.candidateCount
+  ) {
+    return;
+  }
+  semesterFileCleanupExecuting.value = true;
+  try {
+    semesterFileCleanupResult.value = await props.api.post(`/api/v1/semesters/${semesterId}/files/cleanup`, {
+      allowUnrecoverable: semesterFileCleanupUnrecoverableConfirmed.value,
+      confirmedSemesterName: semesterFileCleanupConfirmation.value.trim(),
+      previewToken: semesterFileCleanupPreview.value.previewToken
+    });
+    semesterFileCleanupConfirmation.value = "";
+    semesterFileCleanupUnrecoverableConfirmed.value = false;
+    await refreshSemesterFileCleanupPreview();
+    const result = semesterFileCleanupResult.value;
+    if (result.errors?.length) {
+      ElMessage.warning(`已删除 ${result.deletedCount || 0} 个文件，另有 ${result.errors.length} 个文件处理失败`);
+    } else {
+      ElMessage.success(`已删除 ${result.deletedCount || 0} 个归档文件，释放 ${formatBytes(result.deletedBytes)}`);
+    }
+  } catch (error) {
+    ElMessage.error(messageOf(error));
+  } finally {
+    semesterFileCleanupExecuting.value = false;
+  }
+}
+
+function resetSemesterFileCleanup() {
+  semesterFileCleanupRequestId++;
+  semesterFileCleanupTarget.value = null;
+  semesterFileCleanupPreview.value = null;
+  semesterFileCleanupResult.value = null;
+  semesterFileCleanupConfirmation.value = "";
+  semesterFileCleanupUnrecoverableConfirmed.value = false;
+  semesterFileCleanupLoading.value = false;
+  semesterFileCleanupExecuting.value = false;
 }
 
 async function refreshRubricTemplates() {
@@ -1555,18 +1827,53 @@ async function deleteSelectedStudents() {
 }
 
 async function previewFileCleanup() {
+  if (cleanupPreviewLoading.value) return;
+  const olderThanDays = Number(cleanupOlderThanDays.value);
+  if (!Number.isInteger(olderThanDays) || olderThanDays < 1 || olderThanDays > 3650) {
+    ElMessage.warning("请输入 1 至 3650 之间的清理天数");
+    return;
+  }
+  const requestId = ++cleanupPreviewRequestId;
+  cleanupPreviewLoading.value = true;
+  cleanupPreview.value = null;
+  cleanupPreviewedOlderThanDays.value = null;
   try {
-    cleanupPreview.value = await props.api.get(`/api/v1/files/cleanup-preview?olderThanDays=${cleanupOlderThanDays.value}`);
+    const preview = await props.api.get(`/api/v1/files/cleanup-preview?olderThanDays=${olderThanDays}`);
+    if (requestId !== cleanupPreviewRequestId || Number(cleanupOlderThanDays.value) !== olderThanDays) {
+      return;
+    }
+    cleanupPreview.value = preview;
+    cleanupPreviewedOlderThanDays.value = olderThanDays;
+    if (preview?.candidateCount) {
+      ElMessage.success(`预览完成，找到 ${preview.candidateCount} 个候选文件`);
+    } else {
+      ElMessage.info(`预览完成，没有超过 ${olderThanDays} 天的可清理文件`);
+    }
   } catch (error) {
     ElMessage.error(messageOf(error));
+  } finally {
+    if (requestId === cleanupPreviewRequestId) {
+      cleanupPreviewLoading.value = false;
+    }
   }
 }
 
+function resetCleanupPreview() {
+  cleanupPreviewRequestId++;
+  cleanupPreview.value = null;
+  cleanupPreviewedOlderThanDays.value = null;
+  cleanupPreviewLoading.value = false;
+}
+
 async function executeFileCleanup() {
-  if (!cleanupPreview.value?.candidateCount) return;
+  if (cleanupExecuting.value || cleanupPreviewLoading.value || !cleanupPreviewIsCurrent.value || !cleanupPreview.value?.candidateCount) {
+    return;
+  }
+  const olderThanDays = cleanupPreviewedOlderThanDays.value;
+  cleanupExecuting.value = true;
   try {
     await ElMessageBox.confirm(
-      `确认清理 ${cleanupPreview.value.candidateCount} 个早于 ${cleanupOlderThanDays.value} 天的上传文件？`,
+      `确认清理 ${cleanupPreview.value.candidateCount} 个早于 ${olderThanDays} 天的上传文件？`,
       "文件清理",
       {
         type: "warning",
@@ -1574,12 +1881,14 @@ async function executeFileCleanup() {
         cancelButtonText: "取消"
       }
     );
-    cleanupPreview.value = await props.api.post(`/api/v1/files/cleanup?olderThanDays=${cleanupOlderThanDays.value}`, {});
+    cleanupPreview.value = await props.api.post(`/api/v1/files/cleanup?olderThanDays=${olderThanDays}`, {});
     ElMessage.success(`已清理 ${cleanupPreview.value.deletedCount || 0} 个文件`);
   } catch (error) {
     if (error !== "cancel") {
       ElMessage.error(messageOf(error));
     }
+  } finally {
+    cleanupExecuting.value = false;
   }
 }
 
@@ -2202,6 +2511,15 @@ function cleanupFileType(type) {
     submission_zip: "学生提交",
     rubric_word: "评分文档",
     rubric_excel: "评分表格"
+  };
+  return labels[type] || type || "未知";
+}
+
+function semesterCleanupFileType(type) {
+  const labels = {
+    submission_zip: "提交 ZIP",
+    rubric_file: "评分附件",
+    mixed: "共享类型"
   };
   return labels[type] || type || "未知";
 }

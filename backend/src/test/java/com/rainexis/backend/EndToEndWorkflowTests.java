@@ -4,18 +4,24 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rainexis.backend.config.DatabaseMigrationConfig;
+import com.rainexis.backend.entity.TAssignment;
 import com.rainexis.backend.entity.TAiReport;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TFile;
 import com.rainexis.backend.entity.TProjectStructure;
+import com.rainexis.backend.entity.TRubric;
 import com.rainexis.backend.entity.TRubricDimensionItem;
+import com.rainexis.backend.entity.TSemester;
 import com.rainexis.backend.entity.TSubmission;
 import com.rainexis.backend.entity.TAiTask;
 import com.rainexis.backend.entity.TUser;
+import com.rainexis.backend.mapper.TAssignmentMapper;
 import com.rainexis.backend.mapper.TAiReportMapper;
 import com.rainexis.backend.mapper.TFileMapper;
 import com.rainexis.backend.mapper.TProjectStructureMapper;
+import com.rainexis.backend.mapper.TRubricMapper;
 import com.rainexis.backend.mapper.TRubricDimensionItemMapper;
+import com.rainexis.backend.mapper.TSemesterMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TAiTaskMapper;
 import com.rainexis.backend.mapper.TUserMapper;
@@ -100,6 +106,15 @@ class EndToEndWorkflowTests {
 
     @Autowired
     private TFileMapper fileMapper;
+
+    @Autowired
+    private TAssignmentMapper assignmentMapper;
+
+    @Autowired
+    private TSemesterMapper semesterMapper;
+
+    @Autowired
+    private TRubricMapper rubricMapper;
 
     @Autowired
     private TRubricDimensionItemMapper rubricDimensionItemMapper;
@@ -991,12 +1006,15 @@ class EndToEndWorkflowTests {
     @Test
     void fileCleanupPreviewAndExecutionRemoveOldStoredFiles() throws Exception {
         String teacherToken = registerTeacher("t019", "CS-19");
+        String adminToken = registerAdmin("admin_file_cleanup");
         Path uploadRoot = Path.of(System.getProperty("java.io.tmpdir"), "ai-code-grading-test-uploads")
                 .toAbsolutePath()
                 .normalize();
         Files.createDirectories(uploadRoot);
         Path oldFile = uploadRoot.resolve("cleanup-old.txt");
+        Path protectedFile = uploadRoot.resolve("cleanup-protected.txt");
         Files.writeString(oldFile, "old upload", StandardCharsets.UTF_8);
+        Files.writeString(protectedFile, "referenced upload", StandardCharsets.UTF_8);
 
         TFile record = new TFile();
         record.setFileName("cleanup-old.txt");
@@ -1008,24 +1026,69 @@ class EndToEndWorkflowTests {
         record.setCreatedAt(LocalDateTime.now().minusDays(240));
         fileMapper.insert(record);
 
+        TUser admin = userMapper.selectOne(new LambdaQueryWrapper<TUser>()
+                .eq(TUser::getUsername, "admin_file_cleanup")
+                .last("limit 1"));
+        TSemester protectedSemester = new TSemester();
+        protectedSemester.setName("通用文件清理保护测试");
+        protectedSemester.setStatus("archived");
+        protectedSemester.setCreatedBy(admin.getId());
+        protectedSemester.setArchivedAt(LocalDateTime.now());
+        protectedSemester.setCreatedAt(LocalDateTime.now());
+        semesterMapper.insert(protectedSemester);
+        TAssignment protectedAssignment = new TAssignment();
+        protectedAssignment.setTitle("通用文件清理保护作业");
+        protectedAssignment.setTeacherId(admin.getId());
+        protectedAssignment.setSemesterId(protectedSemester.getId());
+        protectedAssignment.setStatus("closed");
+        protectedAssignment.setCreatedAt(LocalDateTime.now());
+        assignmentMapper.insert(protectedAssignment);
+        TSubmission protectedSubmission = new TSubmission();
+        protectedSubmission.setAssignmentId(protectedAssignment.getId());
+        protectedSubmission.setStudentId(admin.getId());
+        protectedSubmission.setFileUrl(protectedFile.toString());
+        protectedSubmission.setFileName("cleanup-protected.txt");
+        protectedSubmission.setSubmissionVersion(1);
+        protectedSubmission.setCurrent(true);
+        protectedSubmission.setUploadTime(LocalDateTime.now());
+        protectedSubmission.setStatus("parsed");
+        submissionMapper.insert(protectedSubmission);
+        TFile protectedRecord = storedFileRecord(
+                protectedFile,
+                "cleanup-protected.txt",
+                "submission_zip",
+                admin.getId());
+        protectedRecord.setCreatedAt(LocalDateTime.now().minusDays(230));
+        fileMapper.insert(protectedRecord);
+
         mockMvc.perform(get("/api/v1/files/cleanup-preview")
                         .param("olderThanDays", "180")
                         .header("Authorization", bearer(teacherToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/files/cleanup-preview")
+                        .param("olderThanDays", "180")
+                        .header("Authorization", bearer(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.dryRun").value(true))
                 .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.protectedCount").value(1))
+                .andExpect(jsonPath("$.data.candidateFiles.length()").value(2))
                 .andExpect(jsonPath("$.data.candidateFiles[0].fileName").value("cleanup-old.txt"))
                 .andExpect(jsonPath("$.data.candidateFiles[0].fileType").value("submission_zip"))
                 .andExpect(jsonPath("$.data.candidateFiles[0].relativePath").value("cleanup-old.txt"))
                 .andExpect(jsonPath("$.data.candidateFiles[0].pathAllowed").value(true))
+                .andExpect(jsonPath("$.data.candidateFiles[1].fileName").value("cleanup-protected.txt"))
+                .andExpect(jsonPath("$.data.candidateFiles[1].deletable").value(false))
+                .andExpect(jsonPath("$.data.candidateFiles[1].skipReason").value("业务记录仍在引用"))
                 .andExpect(jsonPath("$.data.deletedCount").value(0));
         assertThat(Files.exists(oldFile)).isTrue();
         assertThat(fileMapper.selectById(record.getId())).isNotNull();
 
         mockMvc.perform(post("/api/v1/files/cleanup")
                         .param("olderThanDays", "180")
-                        .header("Authorization", bearer(teacherToken))
-                        .header("X-CSRF-Token", csrf(teacherToken)))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.dryRun").value(false))
                 .andExpect(jsonPath("$.data.candidateCount").value(1))
@@ -1033,6 +1096,232 @@ class EndToEndWorkflowTests {
 
         assertThat(Files.exists(oldFile)).isFalse();
         assertThat(fileMapper.selectById(record.getId())).isNull();
+        assertThat(Files.exists(protectedFile)).isTrue();
+        assertThat(fileMapper.selectById(protectedRecord.getId())).isNotNull();
+
+        Files.deleteIfExists(protectedFile);
+        fileMapper.deleteById(protectedRecord.getId());
+        submissionMapper.deleteById(protectedSubmission.getId());
+        assignmentMapper.deleteById(protectedAssignment.getId());
+        semesterMapper.deleteById(protectedSemester.getId());
+    }
+
+    @Test
+    void archivedSemesterFileCleanupDeletesUploadsButPreservesAcademicRecords() throws Exception {
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        String adminUsername = "archive_admin_" + suffix;
+        String adminToken = registerAdmin(adminUsername);
+        TUser admin = userMapper.selectOne(new LambdaQueryWrapper<TUser>()
+                .eq(TUser::getUsername, adminUsername)
+                .last("limit 1"));
+
+        TSemester semester = new TSemester();
+        semester.setName("归档清理测试学期-" + suffix);
+        semester.setStatus("archived");
+        semester.setCreatedBy(admin.getId());
+        semester.setArchivedAt(LocalDateTime.now());
+        semester.setCreatedAt(LocalDateTime.now().minusDays(1));
+        semesterMapper.insert(semester);
+
+        TAssignment assignment = new TAssignment();
+        assignment.setTitle("归档文件清理测试作业");
+        assignment.setTeacherId(admin.getId());
+        assignment.setSemesterId(semester.getId());
+        assignment.setStatus("closed");
+        assignment.setCreatedAt(LocalDateTime.now());
+        assignmentMapper.insert(assignment);
+
+        Path uploadRoot = Path.of(System.getProperty("java.io.tmpdir"), "ai-code-grading-test-uploads")
+                .toAbsolutePath()
+                .normalize();
+        Path testDirectory = uploadRoot.resolve("semester-cleanup-" + suffix);
+        Files.createDirectories(testDirectory);
+        Path submissionFile = testDirectory.resolve("student.zip");
+        Path unrecoverableFile = testDirectory.resolve("unparsed.zip");
+        Path rubricFile = testDirectory.resolve("rubric.xlsx");
+        Files.write(submissionFile, new byte[]{'P', 'K', 3, 4, 1, 2, 3});
+        Files.write(unrecoverableFile, new byte[]{'P', 'K', 3, 4, 5, 6, 7});
+        Files.writeString(rubricFile, "legacy rubric", StandardCharsets.UTF_8);
+
+        TSubmission submission = new TSubmission();
+        submission.setAssignmentId(assignment.getId());
+        submission.setStudentId(admin.getId());
+        submission.setFileUrl(submissionFile.toString());
+        submission.setFileName("student.zip");
+        submission.setSubmissionVersion(1);
+        submission.setCurrent(true);
+        submission.setUploadTime(LocalDateTime.now());
+        submission.setStatus("scored");
+        submissionMapper.insert(submission);
+
+        TProjectStructure structure = new TProjectStructure();
+        structure.setSubmissionId(submission.getId());
+        structure.setStructureJson("""
+                {"file_tree":[{"path":"src/Main.java","content":"class Main {}"}]}
+                """);
+        structure.setLanguage("java");
+        structure.setFileCount(1);
+        structure.setCreatedAt(LocalDateTime.now());
+        structureMapper.insert(structure);
+        submission.setProjectStructureId(structure.getId());
+        submission.setLanguage("java");
+        submission.setFileCount(1);
+        submissionMapper.updateById(submission);
+
+        TSubmission unrecoverableSubmission = new TSubmission();
+        unrecoverableSubmission.setAssignmentId(assignment.getId());
+        unrecoverableSubmission.setStudentId(admin.getId());
+        unrecoverableSubmission.setFileUrl(unrecoverableFile.toString());
+        unrecoverableSubmission.setFileName("unparsed.zip");
+        unrecoverableSubmission.setSubmissionVersion(2);
+        unrecoverableSubmission.setCurrent(false);
+        unrecoverableSubmission.setUploadTime(LocalDateTime.now());
+        unrecoverableSubmission.setStatus("parse_failed");
+        submissionMapper.insert(unrecoverableSubmission);
+
+        TRubric rubric = new TRubric();
+        rubric.setAssignmentId(assignment.getId());
+        rubric.setRubricType("auto");
+        rubric.setFileUrl(rubricFile.toString());
+        rubric.setRubricJson("{}");
+        rubric.setParsedJson("{}");
+        rubric.setVersion(1);
+        rubric.setRubricVersion(1);
+        rubric.setIsActive((byte) 1);
+        rubric.setCreatedAt(LocalDateTime.now());
+        rubricMapper.insert(rubric);
+
+        TFile submissionRecord = storedFileRecord(submissionFile, "student.zip", "submission_zip", admin.getId());
+        TFile unrecoverableRecord = storedFileRecord(unrecoverableFile, "unparsed.zip", "submission_zip", admin.getId());
+        TFile rubricRecord = storedFileRecord(rubricFile, "rubric.xlsx", "rubric_excel", admin.getId());
+        fileMapper.insert(submissionRecord);
+        fileMapper.insert(unrecoverableRecord);
+        fileMapper.insert(rubricRecord);
+
+        String teacherToken = registerTeacher("archive_teacher_" + suffix, "CS-ARCHIVE");
+        mockMvc.perform(get("/api/v1/semesters/{id}/files/cleanup-preview", semester.getId())
+                        .header("Authorization", bearer(teacherToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}")
+                        .header("Authorization", bearer(teacherToken))
+                        .header("X-CSRF-Token", csrf(teacherToken)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/v1/semesters/{id}/files/cleanup-preview", semester.getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.dryRun").value(true))
+                .andExpect(jsonPath("$.data.candidateCount").value(3))
+                .andExpect(jsonPath("$.data.submissionZipCount").value(2))
+                .andExpect(jsonPath("$.data.rubricFileCount").value(1))
+                .andExpect(jsonPath("$.data.unrecoverableSubmissionCount").value(1))
+                .andExpect(jsonPath("$.data.candidateFiles.length()").value(3))
+                .andExpect(jsonPath("$.data.previewToken").isNotEmpty());
+        String previewToken = getJson(
+                "/api/v1/semesters/" + semester.getId() + "/files/cleanup-preview",
+                adminToken).path("data").path("previewToken").asText();
+
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("CSRF Token 无效"));
+
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "allowUnrecoverable", true,
+                                "confirmedSemesterName", "错误学期名称",
+                                "previewToken", previewToken)))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("学期名称确认不匹配，请重新输入"));
+
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "allowUnrecoverable", true,
+                                "confirmedSemesterName", semester.getName(),
+                                "previewToken", "stale-preview-token")))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("归档文件列表已变化，请重新预览后再清理"));
+
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "allowUnrecoverable", false,
+                                "confirmedSemesterName", semester.getName(),
+                                "previewToken", previewToken)))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("有 1 份提交没有可重建的解析结构，请确认不可恢复风险后再清理"));
+
+        assertThat(Files.exists(submissionFile)).isTrue();
+        assertThat(Files.exists(unrecoverableFile)).isTrue();
+        assertThat(Files.exists(rubricFile)).isTrue();
+
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", semester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "allowUnrecoverable", true,
+                                "confirmedSemesterName", semester.getName(),
+                                "previewToken", previewToken)))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.dryRun").value(false))
+                .andExpect(jsonPath("$.data.deletedCount").value(3));
+
+        assertThat(Files.exists(submissionFile)).isFalse();
+        assertThat(Files.exists(unrecoverableFile)).isFalse();
+        assertThat(Files.exists(rubricFile)).isFalse();
+        assertThat(fileMapper.selectById(submissionRecord.getId())).isNotNull();
+        assertThat(fileMapper.selectById(unrecoverableRecord.getId())).isNotNull();
+        assertThat(fileMapper.selectById(rubricRecord.getId())).isNotNull();
+        assertThat(semesterMapper.selectById(semester.getId())).isNotNull();
+        assertThat(assignmentMapper.selectById(assignment.getId())).isNotNull();
+        assertThat(submissionMapper.selectById(submission.getId())).isNotNull();
+        assertThat(submissionMapper.selectById(unrecoverableSubmission.getId())).isNotNull();
+        assertThat(structureMapper.selectById(structure.getId())).isNotNull();
+        assertThat(rubricMapper.selectById(rubric.getId())).isNotNull();
+
+        mockMvc.perform(asyncDispatch(mockMvc.perform(get("/api/v1/submissions/{id}/download", submission.getId())
+                                .header("Authorization", bearer(adminToken)))
+                        .andExpect(request().asyncStarted())
+                        .andReturn()))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(zipEntryNames(result.getResponse().getContentAsByteArray()))
+                        .contains("src/Main.java"));
+
+        mockMvc.perform(get("/api/v1/semesters/{id}/files/cleanup-preview", semester.getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.candidateCount").value(0))
+                .andExpect(jsonPath("$.data.missingCount").value(3));
+
+        TSemester activeSemester = new TSemester();
+        activeSemester.setName("活动学期清理拒绝-" + suffix);
+        activeSemester.setStatus("active");
+        activeSemester.setCreatedBy(admin.getId());
+        activeSemester.setCreatedAt(LocalDateTime.now());
+        semesterMapper.insert(activeSemester);
+        mockMvc.perform(get("/api/v1/semesters/{id}/files/cleanup-preview", activeSemester.getId())
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("只能清理已归档学期的文件"));
+        mockMvc.perform(post("/api/v1/semesters/{id}/files/cleanup", activeSemester.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}")
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("只能清理已归档学期的文件"));
+        semesterMapper.deleteById(activeSemester.getId());
     }
 
     @Test
@@ -1364,6 +1653,18 @@ class EndToEndWorkflowTests {
                 {"username":"%s","password":"%s"}
                 """.formatted(username, password));
         return response.path("data").path("token").asText();
+    }
+
+    private TFile storedFileRecord(Path path, String fileName, String fileType, Long uploaderId) throws Exception {
+        TFile record = new TFile();
+        record.setFileName(fileName);
+        record.setStorageName(path.getFileName().toString());
+        record.setFileUrl(path.toString());
+        record.setFileType(fileType);
+        record.setFileSize(Files.size(path));
+        record.setUploaderId(uploaderId);
+        record.setCreatedAt(LocalDateTime.now());
+        return record;
     }
 
     private Long createPublishedAssignment(String token) throws Exception {
