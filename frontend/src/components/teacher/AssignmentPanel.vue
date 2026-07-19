@@ -4,6 +4,14 @@
       <el-card v-if="isAdmin" shadow="never" class="assignment-form-card">
         <template #header>{{ editingAssignmentId ? "编辑作业" : "创建作业" }}</template>
         <el-form label-position="top" class="assignment-form" @submit.prevent="$emit('save-assignment')">
+          <el-alert
+            v-if="isPublishedAssignment"
+            class="wide-field"
+            title="作业已发布，仅可修改标题、课程名称和描述"
+            type="info"
+            :closable="false"
+            show-icon
+          />
           <el-form-item label="标题">
             <el-input v-model="assignmentForm.title" />
           </el-form-item>
@@ -11,7 +19,7 @@
             <el-input v-model="assignmentForm.courseName" />
           </el-form-item>
           <el-form-item label="语言">
-            <el-select v-model="assignmentForm.language">
+            <el-select v-model="assignmentForm.language" :disabled="isPublishedAssignment">
               <el-option label="Java" value="java" />
               <el-option label="Python" value="python" />
               <el-option label="C++" value="cpp" />
@@ -26,6 +34,7 @@
               allow-create
               default-first-option
               placeholder="选择或输入班级"
+              :disabled="isPublishedAssignment"
             >
               <el-option
                 v-for="className in classOptions"
@@ -41,10 +50,11 @@
               type="datetime"
               value-format="YYYY-MM-DDTHH:mm:ss"
               placeholder="选择截止时间"
+              :disabled="isPublishedAssignment"
             />
           </el-form-item>
           <el-form-item label="迟交策略">
-            <el-select v-model="assignmentForm.latePolicy">
+            <el-select v-model="assignmentForm.latePolicy" :disabled="isPublishedAssignment">
               <el-option label="禁止迟交" value="forbid" />
               <el-option label="允许迟交并标记" value="allow_mark" />
               <el-option label="允许迟交并扣分" value="allow_penalty" />
@@ -55,7 +65,7 @@
               v-model="assignmentForm.latePenaltyPercent"
               :min="0"
               :max="100"
-              :disabled="assignmentForm.latePolicy !== 'allow_penalty'"
+              :disabled="isPublishedAssignment || assignmentForm.latePolicy !== 'allow_penalty'"
             />
           </el-form-item>
           <el-form-item label="描述" class="wide-field">
@@ -67,6 +77,7 @@
               clearable
               filterable
               placeholder="选择全局评分模板"
+              :disabled="isPublishedAssignment"
               @change="$emit('template-change', $event)"
             >
               <el-option
@@ -84,19 +95,25 @@
             </div>
             <div class="rubric-picker-summary">
               <span>已选 {{ assignmentForm.selectedRubricItemIds.length }} 个评分点</span>
-              <el-button @click="rubricPickerVisible = true">选择评分点</el-button>
+              <el-button :disabled="isPublishedAssignment" @click="rubricPickerVisible = true">选择评分点</el-button>
             </div>
           </div>
           <div class="assignment-actions wide-field">
-            <el-button v-if="editingAssignmentId" type="primary" native-type="submit">保存修改</el-button>
-            <el-button v-if="selectedAssignmentRecord?.status === 'draft'" type="success" @click="$emit('publish-assignment')">
-              发布作业
-            </el-button>
+            <template v-if="editingAssignmentId">
+              <el-button type="primary" native-type="submit">保存修改</el-button>
+              <el-button v-if="selectedAssignmentRecord?.status === 'draft'" type="success" @click="$emit('publish-assignment')">
+                发布作业
+              </el-button>
+              <el-button type="danger" plain @click="$emit('delete-assignment', selectedAssignmentRecord)">
+                {{ selectedAssignmentRecord?.status === "draft" ? "删除草稿" : "删除作业" }}
+              </el-button>
+              <el-button @click="$emit('reset-assignment-form')">取消编辑</el-button>
+            </template>
             <template v-else>
               <el-button @click="$emit('create-assignment', false)">创建草稿</el-button>
               <el-button type="primary" @click="$emit('create-assignment', true)">创建并发布</el-button>
+              <el-button @click="$emit('reset-assignment-form')">清空</el-button>
             </template>
-            <el-button @click="$emit('reset-assignment-form')">清空</el-button>
           </div>
         </el-form>
       </el-card>
@@ -119,10 +136,12 @@
               <el-tag :type="assignmentStatusType(row.status)" size="small">{{ assignmentStatusText(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="isAdmin" label="操作" width="120">
+          <el-table-column v-if="isAdmin" label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click.stop="$emit('select-assignment', row)">修改</el-button>
-              <el-button link type="danger" @click.stop="$emit('delete-assignment', row)">删除</el-button>
+              <el-button link type="danger" @click.stop="$emit('delete-assignment', row)">
+                {{ row.status === "draft" ? "删除草稿" : "删除作业" }}
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -162,7 +181,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import MetricCard from "../MetricCard.vue";
 
 const props = defineProps({
@@ -189,6 +208,7 @@ defineEmits([
 ]);
 
 const rubricPickerVisible = ref(false);
+const isPublishedAssignment = computed(() => props.selectedAssignmentRecord?.status === "published");
 
 function cleanPointName(item) {
   const raw = item?.pointName || item?.dimensionName || "评分点";
@@ -208,13 +228,17 @@ function selectAllEnabled() {
 function assignmentClassNames(assignment) {
   if (!assignment) return [];
   if (Array.isArray(assignment.classNames) && assignment.classNames.length) {
-    return assignment.classNames.filter(Boolean);
+    return normalizedClassNames(assignment.classNames);
   }
   if (!assignment.className) return [];
-  return String(assignment.className)
-    .split(",")
+  return normalizedClassNames([assignment.className]);
+}
+
+function normalizedClassNames(values) {
+  return [...new Set(values
+    .flatMap((value) => String(value || "").split(/[,，]/))
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean))];
 }
 
 function displayAssignmentClasses(assignment) {

@@ -26,8 +26,13 @@ public class AssignmentClassService {
         }
         Set<String> unique = new LinkedHashSet<>();
         for (String className : classNames) {
-            if (className != null && !className.isBlank()) {
-                unique.add(className.trim());
+            if (className == null || className.isBlank()) {
+                continue;
+            }
+            for (String part : className.split("[,，]")) {
+                if (!part.isBlank()) {
+                    unique.add(part.trim());
+                }
             }
         }
         return List.copyOf(unique);
@@ -57,7 +62,7 @@ public class AssignmentClassService {
                 .filter(value -> value != null && !value.isBlank())
                 .toList();
         if (!linkedClasses.isEmpty()) {
-            return linkedClasses;
+            return normalize(linkedClasses);
         }
         return parseLegacyClassName(assignment.getClassName());
     }

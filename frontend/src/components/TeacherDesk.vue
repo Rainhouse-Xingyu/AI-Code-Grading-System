@@ -959,7 +959,7 @@ const assignmentForm = reactive({
   courseName: "",
   description: "请上传 zip 格式代码包",
   language: "java",
-  classNames: props.user.className ? [props.user.className] : [],
+  classNames: normalizedClassNames([props.user.className, props.user.teachingClass]),
   endTime: "",
   latePolicy: "forbid",
   latePenaltyPercent: 0,
@@ -992,9 +992,9 @@ const teacherSubtitle = computed(() => {
 });
 const classOptions = computed(() => {
   const values = new Set();
-  if (props.user.className) values.add(props.user.className);
+  normalizedClassNames([props.user.className, props.user.teachingClass]).forEach((className) => values.add(className));
   students.value.forEach((student) => {
-    if (student.className) values.add(student.className);
+    normalizedClassNames([student.className]).forEach((className) => values.add(className));
   });
   assignments.value.forEach((assignment) => {
     assignmentClassNames(assignment).forEach((className) => values.add(className));
@@ -1342,16 +1342,23 @@ async function refreshTokenStats() {
 
 async function createAssignment(published) {
   if (!isAdmin.value) return;
+  if (editingAssignmentId.value) {
+    ElMessage.warning("当前正在编辑作业，请先保存或取消编辑");
+    return;
+  }
   if (!validateAssignmentTemplateSelection(published)) return;
   if (!validateAssignmentClasses()) return;
   try {
+    if (published) await confirmAssignmentPublish();
     const created = await props.api.post("/api/v1/assignments", { ...assignmentForm, published });
     assignments.value = [created, ...assignments.value];
     selectedAssignment.value = created.id;
     editingAssignmentId.value = created.id;
-    ElMessage.success(published ? "作业已创建并发布" : "草稿已创建");
+    ElMessage.success(published
+      ? `作业已发布至：${assignmentClassNames(created).join("、")}`
+      : "草稿已创建");
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (error !== "cancel") ElMessage.error(messageOf(error));
   }
 }
 
@@ -1383,11 +1390,13 @@ function selectAssignment(row) {
 async function saveAssignment() {
   if (!isAdmin.value) return;
   if (!editingAssignmentId.value) {
-    await createAssignment(true);
+    ElMessage.warning("请使用“创建草稿”或“创建并发布”完成新建作业");
     return;
   }
-  if (!validateAssignmentTemplateSelection(false)) return;
-  if (!validateAssignmentClasses()) return;
+  if (selectedAssignmentRecord.value?.status !== "published") {
+    if (!validateAssignmentTemplateSelection(false)) return;
+    if (!validateAssignmentClasses()) return;
+  }
   try {
     const updated = await props.api.put(`/api/v1/assignments/${editingAssignmentId.value}`, {
       ...assignmentForm,
@@ -1403,24 +1412,37 @@ async function saveAssignment() {
 async function publishAssignment() {
   if (!isAdmin.value) return;
   if (!editingAssignmentId.value) return;
+  if (!validateAssignmentTemplateSelection(true)) return;
+  if (!validateAssignmentClasses()) return;
   try {
-    const updated = await props.api.patch(`/api/v1/assignments/${editingAssignmentId.value}/publish`, {});
+    await confirmAssignmentPublish();
+    const updated = await props.api.put(`/api/v1/assignments/${editingAssignmentId.value}`, {
+      ...assignmentForm,
+      published: true
+    });
     assignments.value = assignments.value.map((item) => (item.id === updated.id ? updated : item));
     selectedAssignment.value = updated.id;
-    ElMessage.success("作业已发布，学生端可见");
+    ElMessage.success(`作业已发布至：${assignmentClassNames(updated).join("、")}`);
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (error !== "cancel") ElMessage.error(messageOf(error));
   }
 }
 
 async function deleteAssignment(row) {
   if (!isAdmin.value || !row?.id) return;
+  const isDraft = row.status === "draft";
   try {
-    await ElMessageBox.confirm(`确认删除作业“${row.title}”？相关提交、AI 报告和发布记录也会一并删除。`, "删除作业", {
-      type: "warning",
-      confirmButtonText: "确认删除",
-      cancelButtonText: "取消"
-    });
+    await ElMessageBox.confirm(
+      isDraft
+        ? `确认删除草稿“${row.title}”？删除后无法恢复。`
+        : `确认彻底删除作业“${row.title}”？学生提交、评分任务、AI 报告、复核记录、发布成绩和上传文件都会一并删除，且无法恢复。`,
+      isDraft ? "删除草稿" : "彻底删除作业",
+      {
+        type: isDraft ? "warning" : "error",
+        confirmButtonText: isDraft ? "确认删除草稿" : "确认彻底删除",
+        cancelButtonText: "取消"
+      }
+    );
     await props.api.delete(`/api/v1/assignments/${row.id}`);
     assignments.value = assignments.value.filter((item) => item.id !== row.id);
     if (editingAssignmentId.value === row.id) {
@@ -1428,7 +1450,7 @@ async function deleteAssignment(row) {
     }
     selectedAssignment.value = assignments.value[0]?.id || null;
     await refreshSubmissions();
-    ElMessage.success("作业已删除");
+    ElMessage.success(isDraft ? "草稿已删除" : "作业及关联数据已删除");
   } catch (error) {
     if (error !== "cancel") {
       ElMessage.error(messageOf(error));
@@ -1443,7 +1465,7 @@ function resetAssignmentForm() {
   assignmentForm.courseName = "";
   assignmentForm.description = "";
   assignmentForm.language = "java";
-  assignmentForm.classNames = props.user.className ? [props.user.className] : [];
+  assignmentForm.classNames = normalizedClassNames([props.user.className, props.user.teachingClass]);
   assignmentForm.endTime = "";
   assignmentForm.latePolicy = "forbid";
   assignmentForm.latePenaltyPercent = 0;
@@ -1475,10 +1497,7 @@ function validateAssignmentTemplateSelection(requireTemplate = false) {
 }
 
 function validateAssignmentClasses() {
-  assignmentForm.classNames = assignmentForm.classNames
-    .map((item) => (item || "").trim())
-    .filter(Boolean)
-    .filter((item, index, all) => all.indexOf(item) === index);
+  assignmentForm.classNames = normalizedClassNames(assignmentForm.classNames);
   if (!assignmentForm.classNames.length) {
     ElMessage.warning("请选择至少一个发布班级");
     return false;
@@ -1489,13 +1508,35 @@ function validateAssignmentClasses() {
 function assignmentClassNames(assignment) {
   if (!assignment) return [];
   if (Array.isArray(assignment.classNames) && assignment.classNames.length) {
-    return assignment.classNames.filter(Boolean);
+    return normalizedClassNames(assignment.classNames);
   }
   if (!assignment.className) return [];
-  return String(assignment.className)
-    .split(",")
+  return normalizedClassNames([assignment.className]);
+}
+
+function normalizedClassNames(values) {
+  return [...new Set((values || [])
+    .flatMap((value) => String(value || "").split(/[,，]/))
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean))];
+}
+
+async function confirmAssignmentPublish() {
+  const classNames = normalizedClassNames(assignmentForm.classNames);
+  const studentCount = students.value.filter((student) => classNames.includes(student.className)).length;
+  const emptyClasses = classNames.filter((className) => !students.value.some((student) => student.className === className));
+  const emptyClassTip = emptyClasses.length
+    ? `\n注意：${emptyClasses.join("、")} 当前学期尚无学生。`
+    : "";
+  await ElMessageBox.confirm(
+    `确认发布到 ${classNames.join("、")}，当前覆盖 ${studentCount} 名学生？${emptyClassTip}`,
+    "确认发布班级",
+    {
+      type: emptyClasses.length ? "warning" : "info",
+      confirmButtonText: "确认发布",
+      cancelButtonText: "返回检查"
+    }
+  );
 }
 
 function displayAssignmentClasses(assignment) {

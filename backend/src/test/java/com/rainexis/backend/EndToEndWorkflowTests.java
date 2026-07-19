@@ -62,6 +62,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -847,12 +848,16 @@ class EndToEndWorkflowTests {
         mockMvc.perform(put("/api/v1/assignments/{id}", publishedId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"title":"Should Stay","description":"description only","language":"python","published":true}
+                                {"title":"Published B","courseName":"Course B","description":"description only","language":"python",
+                                 "classNames":["OTHER"],"endTime":"2099-01-01T00:00:00","published":true}
                                 """)
                         .header("Authorization", bearer(adminToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.title").value("Published A"))
+                .andExpect(jsonPath("$.data.title").value("Published B"))
+                .andExpect(jsonPath("$.data.courseName").value("Course B"))
                 .andExpect(jsonPath("$.data.language").value("java"))
+                .andExpect(jsonPath("$.data.endTime").doesNotExist())
+                .andExpect(jsonPath("$.data.classNames", containsInAnyOrder("CS-8")))
                 .andExpect(jsonPath("$.data.description").value("description only"));
 
         String expiredEnd = LocalDateTime.now().minusDays(1).withNano(0).toString();
@@ -860,9 +865,40 @@ class EndToEndWorkflowTests {
         createPublishedAssignment(teacherToken, "Late Visible", "java", "\"endTime\":\"%s\",\"latePolicy\":\"allow_mark\"".formatted(expiredEnd));
 
         JsonNode assignments = getJson("/api/v1/assignments", studentToken);
-        assertThat(assignments.path("data").findValuesAsText("title")).contains("Published A");
+        assertThat(assignments.path("data").findValuesAsText("title")).contains("Published B");
         assertThat(assignments.path("data").findValuesAsText("title")).contains("Late Visible");
         assertThat(assignments.path("data").findValuesAsText("title")).doesNotContain("Expired");
+
+        Long submissionId = submitZip(studentToken, publishedId);
+        Path submissionFile = Path.of(submissionMapper.selectById(submissionId).getFileUrl());
+        assertThat(Files.exists(submissionFile)).isTrue();
+
+        TAiTask activeTask = new TAiTask();
+        activeTask.setAssignmentId(publishedId);
+        activeTask.setSubmissionId(submissionId);
+        activeTask.setStatus("pending");
+        activeTask.setCreatedAt(LocalDateTime.now());
+        taskMapper.insert(activeTask);
+        mockMvc.perform(delete("/api/v1/assignments/{id}", publishedId)
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("作业存在进行中的 AI 评分任务，请先结束评分后再删除"));
+
+        taskMapper.deleteById(activeTask.getId());
+        mockMvc.perform(delete("/api/v1/assignments/{id}", publishedId)
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.deleted").value(true))
+                .andExpect(jsonPath("$.data.submissionCount").value(1));
+        assertThat(assignmentMapper.selectById(publishedId)).isNull();
+        assertThat(submissionMapper.selectById(submissionId)).isNull();
+        assertThat(Files.exists(submissionFile)).isFalse();
+
+        mockMvc.perform(delete("/api/v1/assignments/{id}", draftId)
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.deleted").value(true));
+        assertThat(assignmentMapper.selectById(draftId)).isNull();
     }
 
     @Test

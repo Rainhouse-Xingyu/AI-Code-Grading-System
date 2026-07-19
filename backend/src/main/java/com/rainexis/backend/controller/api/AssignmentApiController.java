@@ -28,6 +28,7 @@ import com.rainexis.backend.service.business.AssignmentDownloadService;
 import com.rainexis.backend.service.business.RubricDimensionItemService;
 import com.rainexis.backend.service.business.ScoreSheetExportService;
 import com.rainexis.backend.service.business.SemesterService;
+import com.rainexis.backend.service.business.SubmissionCleanupService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -78,6 +79,7 @@ public class AssignmentApiController {
     private final RubricDimensionItemService dimensionItemService;
     private final ScoreSheetExportService scoreSheetExportService;
     private final SemesterService semesterService;
+    private final SubmissionCleanupService submissionCleanupService;
     private final ObjectMapper objectMapper;
 
     public AssignmentApiController(TAssignmentMapper assignmentMapper,
@@ -98,6 +100,7 @@ public class AssignmentApiController {
                                    RubricDimensionItemService dimensionItemService,
                                    ScoreSheetExportService scoreSheetExportService,
                                    SemesterService semesterService,
+                                   SubmissionCleanupService submissionCleanupService,
                                    ObjectMapper objectMapper) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
@@ -117,6 +120,7 @@ public class AssignmentApiController {
         this.dimensionItemService = dimensionItemService;
         this.scoreSheetExportService = scoreSheetExportService;
         this.semesterService = semesterService;
+        this.submissionCleanupService = submissionCleanupService;
         this.objectMapper = objectMapper;
     }
 
@@ -188,6 +192,10 @@ public class AssignmentApiController {
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         semesterService.requireActive(assignment.getSemesterId());
         if ("published".equals(assignment.getStatus())) {
+            if (request == null || request.title() == null || request.title().isBlank()) {
+                throw BusinessException.badRequest("作业标题不能为空");
+            }
+            assignment.setTitle(request.title().trim());
             assignment.setCourseName(cleanText(request == null ? null : request.courseName()));
             assignment.setDescription(request == null ? null : request.description());
             assignmentMapper.updateById(assignment);
@@ -225,6 +233,7 @@ public class AssignmentApiController {
     public ApiResponse<TAssignment> publish(@PathVariable Long id) {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
+        semesterService.requireActive(assignment.getSemesterId());
         if (assignment.getNormalizedRubricJson() == null || assignment.getNormalizedRubricJson().isBlank()) {
             throw BusinessException.badRequest("发布作业前请选择管理员发布的评分模板和评分点");
         }
@@ -242,8 +251,17 @@ public class AssignmentApiController {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         semesterService.requireActive(assignment.getSemesterId());
+        long activeTaskCount = taskMapper.selectCount(new LambdaQueryWrapper<com.rainexis.backend.entity.TAiTask>()
+                .eq(com.rainexis.backend.entity.TAiTask::getAssignmentId, id)
+                .in(com.rainexis.backend.entity.TAiTask::getStatus, "pending", "running"));
+        if (activeTaskCount > 0) {
+            throw BusinessException.conflict("作业存在进行中的 AI 评分任务，请先结束评分后再删除");
+        }
         List<TSubmission> submissions = submissionMapper.selectList(new LambdaQueryWrapper<TSubmission>()
                 .eq(TSubmission::getAssignmentId, id));
+        for (TSubmission submission : submissions) {
+            submissionCleanupService.deleteStoredFile(submission.getFileUrl());
+        }
         List<Long> submissionIds = submissions.stream().map(TSubmission::getId).toList();
         if (!submissionIds.isEmpty()) {
             publishMapper.delete(new LambdaQueryWrapper<com.rainexis.backend.entity.TGradePublish>()
