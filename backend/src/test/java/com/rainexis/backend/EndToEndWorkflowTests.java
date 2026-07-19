@@ -3,6 +3,7 @@ package com.rainexis.backend;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lowagie.text.pdf.PdfReader;
 import com.rainexis.backend.config.DatabaseMigrationConfig;
 import com.rainexis.backend.entity.TAssignment;
 import com.rainexis.backend.entity.TAiReport;
@@ -390,7 +391,16 @@ class EndToEndWorkflowTests {
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
                 .andExpect(result -> assertThat(result.getResponse().getHeader("Content-Disposition")).contains("s001_Alice.pdf"))
-                .andExpect(result -> assertThat(result.getResponse().getContentAsByteArray()).isNotEmpty());
+                .andExpect(result -> {
+                    byte[] pdf = result.getResponse().getContentAsByteArray();
+                    assertThat(pdf).isNotEmpty();
+                    PdfReader reader = new PdfReader(pdf);
+                    try {
+                        assertThat(reader.getNumberOfPages()).isGreaterThan(0);
+                    } finally {
+                        reader.close();
+                    }
+                });
 
         mockMvc.perform(post("/api/v1/exports/pdf/batch")
                         .header("Authorization", bearer(teacherToken))

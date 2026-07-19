@@ -111,7 +111,7 @@ public class PdfExportService {
         }
     }
 
-    /** 渲染PDF内容：学生信息、评分标准、得分明细和报告正文 */
+    /** 渲染PDF内容：学生信息、整合评分标准的得分明细和问题建议 */
     private byte[] renderPdf(String title, TSubmission submission, TUser student, TAiReport report, TTeacherReview review) {
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -135,14 +135,13 @@ public class PdfExportService {
             document.add(new Paragraph("提交文件：" + nullToEmpty(submission.getFileName()), font));
             document.add(new Paragraph("最终得分：" + finalScoreText(report, review), font));
             if (review != null && hasText(review.getFinalComment())) {
-                document.add(new Paragraph("教师评语：" + review.getFinalComment(), font));
+                document.add(new Paragraph("教师总评：" + review.getFinalComment(), font));
             }
             document.add(new Paragraph(" ", font));
-            appendRubricSection(document, font, assignment);
-            appendEarnedSection(document, font, review != null && hasText(review.getModifiedJson())
+            appendEarnedSection(document, font, assignment, review != null && hasText(review.getModifiedJson())
                     ? review.getModifiedJson()
                     : report == null ? null : report.getScoreDetailJson());
-            document.add(new Paragraph("请结合得分明细逐项检查自己的实现，重点核对采分点对应的代码是否完整、清晰、可运行。", font));
+            appendIssueSection(document, font, report == null ? null : report.getSuggestion());
             document.close();
             return out.toByteArray();
         } catch (Exception ex) {
@@ -222,31 +221,8 @@ public class PdfExportService {
         return "AI 代码评分报告";
     }
 
-    /** 将本次评分标准追加到PDF文档中 */
-    private void appendRubricSection(Document document, Font font, TAssignment assignment) throws Exception {
-        if (assignment == null || !hasText(assignment.getNormalizedRubricJson())) {
-            return;
-        }
-        document.add(new Paragraph("本次评分标准：", font));
-        Map<String, Object> rubric = objectMapper.readValue(assignment.getNormalizedRubricJson(), new TypeReference<>() {
-        });
-        Object dimensionsValue = rubric.get("dimensions");
-        if (!(dimensionsValue instanceof List<?> dimensions)) {
-            return;
-        }
-        for (Object dimensionValue : dimensions) {
-            if (!(dimensionValue instanceof Map<?, ?> dimension)) {
-                continue;
-            }
-            document.add(new Paragraph("- " + text(dimension.get("name"))
-                    + "（满分 " + text(dimension.get("max_score")) + "）："
-                    + text(dimension.get("criteria")), font));
-        }
-        document.add(new Paragraph(" ", font));
-    }
-
-    /** 追加得分明细，不展示未得分项 */
-    private void appendEarnedSection(Document document, Font font, String json) throws Exception {
+    /** 追加得分明细，将评分标准合并进表格且不展示未得分项 */
+    private void appendEarnedSection(Document document, Font font, TAssignment assignment, String json) throws Exception {
         if (json == null || json.isBlank()) {
             return;
         }
@@ -257,35 +233,157 @@ public class PdfExportService {
         } catch (Exception ex) {
             return;
         }
-        List<Map<String, Object>> earnedRows = rows.stream()
-                .filter(row -> number(row.get("score")) > 0)
-                .toList();
+        List<RubricCriterion> rubricCriteria = rubricCriteria(assignment);
+        List<EarnedRow> earnedRows = new ArrayList<>();
+        for (int index = 0; index < rows.size(); index++) {
+            Map<String, Object> row = rows.get(index);
+            if (number(row.get("score")) <= 0) {
+                continue;
+            }
+            earnedRows.add(new EarnedRow(row, criterionFor(row, index, rows.size(), rubricCriteria)));
+        }
         if (earnedRows.isEmpty()) {
             return;
         }
         document.add(new Paragraph("得分明细：", font));
-        Font headerFont = new Font(font.getBaseFont(), 10, Font.BOLD);
-        Font bodyFont = new Font(font.getBaseFont(), 9);
-        PdfPTable table = new PdfPTable(4);
+        Font headerFont = new Font(font.getBaseFont(), 9, Font.BOLD);
+        Font bodyFont = new Font(font.getBaseFont(), 8.5f);
+        PdfPTable table = new PdfPTable(5);
         table.setWidthPercentage(100);
-        table.setWidths(new float[] {0.8f, 3.2f, 1.2f, 5.8f});
+        table.setWidths(new float[] {0.65f, 2.15f, 1.35f, 3.0f, 3.1f});
         table.setSpacingBefore(6);
         table.setSpacingAfter(10);
         table.setSplitLate(false);
         table.setSplitRows(true);
+        table.setHeaderRows(1);
         addHeaderCell(table, "序号", headerFont);
         addHeaderCell(table, "得分点", headerFont);
         addHeaderCell(table, "得分", headerFont);
-        addHeaderCell(table, "说明", headerFont);
+        addHeaderCell(table, "评分标准", headerFont);
+        addHeaderCell(table, "得分说明", headerFont);
         int index = 1;
-        for (Map<String, Object> row : earnedRows) {
+        for (EarnedRow earnedRow : earnedRows) {
+            Map<String, Object> row = earnedRow.score();
             addBodyCell(table, String.valueOf(index++), bodyFont, Element.ALIGN_CENTER);
             addBodyCell(table, text(row.get("name")), bodyFont, Element.ALIGN_LEFT);
             addBodyCell(table, scoreText(row), bodyFont, Element.ALIGN_CENTER);
+            addBodyCell(table, earnedRow.criterion(), bodyFont, Element.ALIGN_LEFT);
             addBodyCell(table, text(row.getOrDefault("comment", "")), bodyFont, Element.ALIGN_LEFT);
         }
         document.add(table);
-        document.add(new Paragraph(" ", font));
+    }
+
+    /** 追加问题与改进建议，合并文件路径和行号以节省版面。 */
+    private void appendIssueSection(Document document, Font font, String json) throws Exception {
+        if (!hasText(json)) {
+            return;
+        }
+        List<Map<String, Object>> issues;
+        try {
+            issues = objectMapper.readValue(json, new TypeReference<>() {
+            });
+        } catch (Exception ex) {
+            return;
+        }
+        issues = issues.stream()
+                .filter(issue -> hasText(text(issue.getOrDefault("description", issue.get("message")))))
+                .toList();
+        if (issues.isEmpty()) {
+            return;
+        }
+        document.add(new Paragraph("问题与改进建议：", font));
+        Font headerFont = new Font(font.getBaseFont(), 9, Font.BOLD);
+        Font bodyFont = new Font(font.getBaseFont(), 8.5f);
+        PdfPTable table = new PdfPTable(4);
+        table.setWidthPercentage(100);
+        table.setWidths(new float[] {0.65f, 1.05f, 2.8f, 5.75f});
+        table.setSpacingBefore(6);
+        table.setSpacingAfter(10);
+        table.setSplitLate(false);
+        table.setSplitRows(true);
+        table.setHeaderRows(1);
+        addHeaderCell(table, "序号", headerFont);
+        addHeaderCell(table, "级别", headerFont);
+        addHeaderCell(table, "位置", headerFont);
+        addHeaderCell(table, "问题与建议", headerFont);
+        int index = 1;
+        for (Map<String, Object> issue : issues) {
+            String severity = text(issue.getOrDefault("severity", "suggestion"));
+            addBodyCell(table, String.valueOf(index++), bodyFont, Element.ALIGN_CENTER);
+            addSeverityCell(table, severityText(severity), severity, bodyFont);
+            addBodyCell(table, issueLocation(issue), bodyFont, Element.ALIGN_LEFT);
+            addBodyCell(table,
+                    text(issue.getOrDefault("description", issue.get("message"))),
+                    bodyFont,
+                    Element.ALIGN_LEFT);
+        }
+        document.add(table);
+    }
+
+    private List<RubricCriterion> rubricCriteria(TAssignment assignment) {
+        if (assignment == null || !hasText(assignment.getNormalizedRubricJson())) {
+            return List.of();
+        }
+        try {
+            Map<String, Object> rubric = objectMapper.readValue(assignment.getNormalizedRubricJson(), new TypeReference<>() {
+            });
+            Object dimensionsValue = rubric.get("dimensions");
+            if (!(dimensionsValue instanceof List<?> dimensions)) {
+                return List.of();
+            }
+            List<RubricCriterion> criteria = new ArrayList<>();
+            for (Object dimensionValue : dimensions) {
+                if (!(dimensionValue instanceof Map<?, ?> dimension)) {
+                    continue;
+                }
+                criteria.add(new RubricCriterion(
+                        text(dimension.get("name")),
+                        rubricCriterionText(dimension)
+                ));
+            }
+            return criteria;
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private String rubricCriterionText(Map<?, ?> dimension) {
+        String criterion = text(dimension.get("criteria")).trim();
+        if (hasText(criterion)) {
+            return criterion;
+        }
+        Object itemsValue = dimension.get("items");
+        if (!(itemsValue instanceof List<?> items)) {
+            return "";
+        }
+        return items.stream()
+                .filter(Map.class::isInstance)
+                .map(Map.class::cast)
+                .map(item -> text(item.get("criteria")).trim())
+                .filter(this::hasText)
+                .distinct()
+                .reduce((left, right) -> left + "；" + right)
+                .orElse("");
+    }
+
+    private String criterionFor(Map<String, Object> row,
+                                int rowIndex,
+                                int scoreRowCount,
+                                List<RubricCriterion> rubricCriteria) {
+        String rowCriterion = text(row.get("criteria")).trim();
+        if (hasText(rowCriterion)) {
+            return rowCriterion;
+        }
+        String scoreName = text(row.get("name")).trim();
+        for (RubricCriterion criterion : rubricCriteria) {
+            if (criterion.name().equals(scoreName)) {
+                return criterion.criterion();
+            }
+        }
+        if (scoreRowCount == rubricCriteria.size() && rowIndex < rubricCriteria.size()) {
+            return rubricCriteria.get(rowIndex).criterion();
+        }
+        return "";
     }
 
     private void addHeaderCell(PdfPTable table, String text, Font font) {
@@ -303,6 +401,54 @@ public class PdfExportService {
         cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
         cell.setPadding(5);
         table.addCell(cell);
+    }
+
+    private void addSeverityCell(PdfPTable table, String text, String severity, Font font) {
+        PdfPCell cell = new PdfPCell(new Phrase(text, font));
+        cell.setHorizontalAlignment(Element.ALIGN_CENTER);
+        cell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        cell.setBackgroundColor(switch (severity == null ? "" : severity.toLowerCase()) {
+            case "error" -> new Color(253, 232, 232);
+            case "warning" -> new Color(250, 236, 216);
+            default -> new Color(230, 240, 255);
+        });
+        cell.setPadding(5);
+        table.addCell(cell);
+    }
+
+    private String severityText(String severity) {
+        if (severity == null) {
+            return "建议";
+        }
+        return switch (severity.toLowerCase()) {
+            case "error" -> "错误";
+            case "warning" -> "警告";
+            case "suggestion" -> "建议";
+            default -> severity;
+        };
+    }
+
+    private String issueLocation(Map<String, Object> issue) {
+        String file = text(issue.getOrDefault("file", "project")).trim();
+        if (!hasText(file) || "project".equalsIgnoreCase(file)) {
+            return "项目整体";
+        }
+        String displayFile = compactFilePath(file);
+        String line = text(issue.get("line")).trim();
+        if (!hasText(line) || "-".equals(line) || "0".equals(line)) {
+            return displayFile;
+        }
+        return displayFile + "\n第 " + line + " 行";
+    }
+
+    private String compactFilePath(String file) {
+        String normalized = file.replace('\\', '/');
+        int lastSeparator = normalized.lastIndexOf('/');
+        if (lastSeparator < 0) {
+            return normalized;
+        }
+        int parentSeparator = normalized.lastIndexOf('/', lastSeparator - 1);
+        return normalized.substring(parentSeparator + 1);
     }
 
     private String scoreText(Map<String, Object> row) {
@@ -361,5 +507,11 @@ public class PdfExportService {
 
     /** PDF批量导出ZIP包结果 */
     public record PdfArchive(String filename, byte[] bytes) {
+    }
+
+    private record RubricCriterion(String name, String criterion) {
+    }
+
+    private record EarnedRow(Map<String, Object> score, String criterion) {
     }
 }
