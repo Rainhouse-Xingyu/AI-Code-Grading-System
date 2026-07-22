@@ -13,11 +13,29 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 class DatabaseMigrationConfigTests {
 
     @Test
+    void migrationChecksColumnsOnlyInTheCurrentSchema() {
+        DataSource dataSource = createDataSource("migration_current_schema");
+        new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(dataSource);
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+
+        jdbcTemplate.execute("ALTER TABLE t_ai_task DROP COLUMN batch_id");
+        jdbcTemplate.execute("CREATE SCHEMA shadow_schema");
+        jdbcTemplate.execute("CREATE TABLE shadow_schema.t_ai_task (id BIGINT PRIMARY KEY, batch_id VARCHAR(64))");
+
+        new DatabaseMigrationConfig(jdbcTemplate).migrate();
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE LOWER(table_schema) = 'public'
+                  AND LOWER(table_name) = 't_ai_task'
+                  AND LOWER(column_name) = 'batch_id'
+                """, Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void migrateDoesNotFailWhenOnlyArchivedSemestersExist() {
-        DataSource dataSource = new DriverManagerDataSource(
-                "jdbc:h2:mem:semester_migration_only_archived;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
-                "sa",
-                "");
+        DataSource dataSource = createDataSource("semester_migration_only_archived");
         new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(dataSource);
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
 
@@ -53,5 +71,12 @@ class DatabaseMigrationConfigTests {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM t_semester_student",
                 Integer.class)).isZero();
+    }
+
+    private DataSource createDataSource(String databaseName) {
+        return new DriverManagerDataSource(
+                "jdbc:h2:mem:" + databaseName + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+                "sa",
+                "");
     }
 }

@@ -1,98 +1,188 @@
 <template>
   <section class="desk admin-desk">
-    <div class="page-heading">
-      <div>
+    <header class="module-intro admin-intro">
+      <div class="module-intro-copy">
+        <span class="module-kicker">系统控制台</span>
         <h2>系统管理</h2>
-        <p>运行配置、教师账号、管理员账号</p>
+        <p>集中维护运行参数、服务生效方式，以及教师和管理员账号。</p>
       </div>
-      <div class="toolbar">
+      <div class="module-intro-actions">
         <el-button @click="loadConfig">刷新配置</el-button>
         <el-button @click="loadAccounts">刷新账号</el-button>
       </div>
+    </header>
+
+    <div class="module-summary-grid admin-summary-grid" aria-label="系统管理概览">
+      <MetricCard label="配置项" :value="configItems.length" />
+      <MetricCard label="需重启生效" :value="restartConfigCount" />
+      <MetricCard label="教师账号" :value="teacherAccountCount" />
+      <MetricCard label="管理员账号" :value="adminAccountCount" />
     </div>
 
     <div class="admin-grid">
-      <el-card shadow="never" class="admin-panel">
+      <el-card shadow="never" class="admin-panel data-panel admin-config-panel">
         <template #header>
-          <div class="card-head">
-            <span>运行配置</span>
-            <el-tag size="small" type="info">{{ envPath || ".env" }}</el-tag>
+          <div class="panel-toolbar">
+            <div class="panel-toolbar-main">
+              <strong>运行配置</strong>
+              <span>修改模型、队列、数据库和安全参数</span>
+            </div>
+            <div class="panel-toolbar-actions">
+              <el-tag size="small" type="info" class="admin-env-tag">{{ envPath || ".env" }}</el-tag>
+            </div>
           </div>
         </template>
-        <el-table :data="configItems" height="430" size="small">
-          <el-table-column label="配置项" min-width="230" show-overflow-tooltip>
-            <template #default="{ row }">
-              <el-tooltip placement="top-start" :content="configDescription(row.key)">
-                <div class="config-name">
-                  <strong>{{ configLabel(row.key) }}</strong>
-                  <span>{{ row.key }}</span>
+
+        <div class="admin-config-categories" aria-label="配置分类">
+          <div v-for="category in configCategorySummaries" :key="category.key" class="admin-config-category">
+            <i :class="`is-${category.key}`" />
+            <span>{{ category.label }}</span>
+            <strong>{{ category.count }}</strong>
+          </div>
+        </div>
+
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="保存前请确认生效方式；标记为“需重启”的配置不会立刻作用于正在运行的服务。"
+          class="admin-restart-alert"
+        />
+
+        <div class="admin-table-scroll config-table-scroll">
+          <el-table :data="configItems" height="460" size="small" class="admin-config-table">
+            <el-table-column label="分类" width="92">
+              <template #default="{ row }">
+                <el-tag size="small" effect="plain" type="info">{{ configCategoryName(row.key) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="配置项" min-width="230" show-overflow-tooltip>
+              <template #default="{ row }">
+                <el-tooltip placement="top-start" :content="configDescription(row.key)">
+                  <div class="config-name">
+                    <div class="config-name-title">
+                      <strong>{{ configLabel(row.key) }}</strong>
+                      <span v-if="row.secret" class="admin-sensitive-indicator">敏感</span>
+                    </div>
+                    <span>{{ row.key }}</span>
+                  </div>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column label="配置值" min-width="270">
+              <template #default="{ row }">
+                <div class="admin-config-value">
+                  <el-input-number
+                    v-if="row.inputType === 'number'"
+                    v-model="row.value"
+                    :min="row.min"
+                    :max="row.max"
+                    :step="1"
+                    :precision="0"
+                    step-strictly
+                    controls-position="right"
+                    class="config-number-input"
+                  />
+                  <el-input v-else v-model="row.value" :type="row.secret ? 'password' : 'text'" show-password />
                 </div>
-              </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column label="生效方式" width="138">
+              <template #default="{ row }">
+                <el-tag :type="row.restartRequired ? 'warning' : 'success'" size="small">
+                  {{ restartLabel(row) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty description="暂未读取到运行配置" :image-size="76" />
             </template>
-          </el-table-column>
-          <el-table-column label="值" min-width="260">
-            <template #default="{ row }">
-              <el-input-number
-                v-if="row.inputType === 'number'"
-                v-model="row.value"
-                :min="row.min"
-                :max="row.max"
-                :step="1"
-                :precision="0"
-                step-strictly
-                controls-position="right"
-                class="config-number-input"
-              />
-              <el-input v-else v-model="row.value" :type="row.secret ? 'password' : 'text'" show-password />
-            </template>
-          </el-table-column>
-          <el-table-column label="生效方式" width="130">
-            <template #default="{ row }">
-              <el-tag :type="row.restartRequired ? 'warning' : 'success'" size="small">
-                {{ restartLabel(row) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="form-actions">
+          </el-table>
+        </div>
+
+        <div class="admin-config-footer">
+          <div>
+            <strong>{{ immediateConfigCount }} 项可立即生效</strong>
+            <span>{{ restartConfigCount }} 项保存后需要重启或重建对应服务</span>
+          </div>
           <el-button type="primary" :loading="configSaving" @click="saveConfig">保存配置</el-button>
         </div>
       </el-card>
 
-      <el-card shadow="never" class="admin-panel">
-        <template #header>账号维护</template>
+      <el-card ref="accountEditor" shadow="never" class="admin-panel data-panel admin-account-panel">
+        <template #header>
+          <div class="panel-toolbar">
+            <div class="panel-toolbar-main">
+              <strong>账号维护</strong>
+              <span>{{ accountForm.id ? "更新已选账号资料" : "创建教师或管理员账号" }}</span>
+            </div>
+            <div class="panel-toolbar-actions">
+              <el-tag :type="accountForm.id ? 'warning' : 'primary'" size="small">
+                {{ accountForm.id ? "编辑中" : "新增" }}
+              </el-tag>
+            </div>
+          </div>
+        </template>
+
         <el-form label-position="top" class="admin-account-form" @submit.prevent="saveAccount">
-          <el-form-item label="教职工号/账号">
-            <el-input v-model="accountForm.username" />
-          </el-form-item>
-          <el-form-item label="姓名">
-            <el-input v-model="accountForm.realName" />
-          </el-form-item>
-          <el-form-item label="账号类型">
-            <el-select v-model="accountForm.role">
-              <el-option label="教师" value="teacher" />
-              <el-option label="管理员" value="admin" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="学院">
-            <el-input v-model="accountForm.college" />
-          </el-form-item>
-          <el-form-item label="教授课程">
-            <el-input v-model="accountForm.teachingCourse" />
-          </el-form-item>
-          <el-form-item label="教授班级">
-            <el-input v-model="accountForm.teachingClass" />
-          </el-form-item>
-          <el-form-item label="邮箱">
-            <el-input v-model="accountForm.email" />
-          </el-form-item>
-          <el-form-item label="手机号">
-            <el-input v-model="accountForm.phone" />
-          </el-form-item>
-          <el-form-item label="初始密码">
-            <el-input v-model="accountForm.initialPassword" show-password />
-          </el-form-item>
-          <div class="form-actions">
+          <section class="admin-form-section">
+            <div class="admin-form-section-head">
+              <strong>基本身份</strong>
+              <span>用于登录和权限识别</span>
+            </div>
+            <div class="admin-form-grid">
+              <el-form-item label="教职工号 / 账号">
+                <el-input v-model="accountForm.username" placeholder="请输入唯一账号" />
+              </el-form-item>
+              <el-form-item label="姓名">
+                <el-input v-model="accountForm.realName" placeholder="请输入姓名" />
+              </el-form-item>
+              <el-form-item label="账号类型">
+                <el-select v-model="accountForm.role" placeholder="选择账号类型">
+                  <el-option label="教师" value="teacher" />
+                  <el-option label="管理员" value="admin" />
+                </el-select>
+              </el-form-item>
+              <el-form-item :label="accountForm.id ? '新密码（留空不修改）' : '初始密码'" class="admin-password-field">
+                <el-input v-model="accountForm.initialPassword" type="password" show-password autocomplete="new-password" />
+              </el-form-item>
+            </div>
+          </section>
+
+          <section class="admin-form-section">
+            <div class="admin-form-section-head">
+              <strong>教学信息</strong>
+              <span>用于教师账号归属和筛选</span>
+            </div>
+            <div class="admin-form-grid">
+              <el-form-item label="学院">
+                <el-input v-model="accountForm.college" placeholder="例如：计算机学院" />
+              </el-form-item>
+              <el-form-item label="教授课程">
+                <el-input v-model="accountForm.teachingCourse" placeholder="请输入课程名称" />
+              </el-form-item>
+              <el-form-item label="教授班级" class="admin-form-span-two">
+                <el-input v-model="accountForm.teachingClass" placeholder="请输入班级名称" />
+              </el-form-item>
+            </div>
+          </section>
+
+          <section class="admin-form-section">
+            <div class="admin-form-section-head">
+              <strong>联系信息</strong>
+              <span>用于完善账号资料</span>
+            </div>
+            <div class="admin-form-grid">
+              <el-form-item label="邮箱">
+                <el-input v-model="accountForm.email" placeholder="name@example.com" />
+              </el-form-item>
+              <el-form-item label="手机号">
+                <el-input v-model="accountForm.phone" placeholder="请输入手机号" />
+              </el-form-item>
+            </div>
+          </section>
+
+          <div class="form-actions admin-form-actions">
             <el-button @click="resetForm">清空</el-button>
             <el-button type="primary" :loading="accountSaving" native-type="submit">
               {{ accountForm.id ? "保存账号" : "新增账号" }}
@@ -102,53 +192,98 @@
       </el-card>
     </div>
 
-    <el-card shadow="never" class="admin-panel">
+    <el-card shadow="never" class="admin-panel data-panel admin-account-list-panel">
       <template #header>
-        <div class="card-head">
-          <span>教师与管理员账号</span>
-          <div class="toolbar">
-            <el-input v-model="accountSearch" size="small" class="admin-search" clearable placeholder="搜索账号/姓名/学院/班级" />
-            <el-button size="small" @click="downloadTemplate">导入模板</el-button>
-            <el-input v-model="importPassword" size="small" class="admin-password" show-password placeholder="导入默认密码" />
-            <el-upload :show-file-list="false" :auto-upload="false" :on-change="importAccounts" accept=".xlsx">
-              <el-button size="small" type="success">Excel 导入</el-button>
-            </el-upload>
+        <div class="panel-toolbar">
+          <div class="panel-toolbar-main">
+            <strong>教师与管理员账号</strong>
+            <span>查询账号资料，编辑信息或重置登录密码</span>
+          </div>
+          <div class="panel-toolbar-actions">
+            <el-tag size="small" type="info">显示 {{ filteredAccounts.length }} / {{ accounts.length }}</el-tag>
           </div>
         </div>
       </template>
-      <el-progress v-if="importProgress > 0 && importProgress < 100" :percentage="importProgress" />
-      <el-table :data="filteredAccounts" height="300">
-        <el-table-column prop="username" label="账号" width="130" />
-        <el-table-column prop="realName" label="姓名" width="110" />
-        <el-table-column label="类型" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.role === 'admin' ? 'warning' : 'info'">
-              {{ roleText(row.role) }}
-            </el-tag>
+
+      <div class="account-list-toolbar">
+        <div class="account-search-zone">
+          <span class="admin-field-label">搜索账号</span>
+          <el-input
+            v-model="accountSearch"
+            class="admin-search"
+            clearable
+            placeholder="搜索账号、姓名、学院或班级"
+          />
+        </div>
+        <div class="account-import-zone">
+          <div class="admin-import-password">
+            <span class="admin-field-label">导入默认密码 <em>敏感</em></span>
+            <el-input
+              v-model="importPassword"
+              class="admin-password"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              placeholder="导入默认密码"
+            />
+          </div>
+          <div class="account-import-actions">
+            <el-button @click="downloadTemplate">下载导入模板</el-button>
+            <el-upload :show-file-list="false" :auto-upload="false" :on-change="importAccounts" accept=".xlsx">
+              <el-button type="success">Excel 导入</el-button>
+            </el-upload>
+          </div>
+        </div>
+      </div>
+
+      <el-progress
+        v-if="importProgress > 0 && importProgress < 100"
+        :percentage="importProgress"
+        class="admin-import-progress"
+      />
+
+      <div class="admin-table-scroll account-table-scroll">
+        <el-table :data="filteredAccounts" height="330" class="admin-account-table">
+          <el-table-column prop="username" label="账号" width="140" />
+          <el-table-column prop="realName" label="姓名" width="110" />
+          <el-table-column label="类型" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.role === 'admin' ? 'warning' : 'info'">
+                {{ roleText(row.role) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="college" label="学院" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="teachingCourse" label="课程" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="teachingClass" label="教授班级" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="email" label="邮箱" min-width="180" show-overflow-tooltip />
+          <el-table-column label="操作" fixed="right" width="170">
+            <template #default="{ row }">
+              <div class="admin-row-actions">
+                <el-button link type="primary" @click="editAccount(row)">编辑</el-button>
+                <el-button link type="warning" @click="resetPassword(row)">重置密码</el-button>
+              </div>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <el-empty :description="accountSearch ? '没有匹配的账号' : '暂时没有教师或管理员账号'" :image-size="82" />
           </template>
-        </el-table-column>
-        <el-table-column prop="college" label="学院" min-width="130" show-overflow-tooltip />
-        <el-table-column prop="teachingCourse" label="课程" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="teachingClass" label="教授班级" min-width="150" show-overflow-tooltip />
-        <el-table-column label="操作" width="150">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="editAccount(row)">编辑</el-button>
-            <el-button link type="warning" @click="resetPassword(row)">重置密码</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </el-card>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { messageOf } from "../JS/api.js";
+import MetricCard from "./MetricCard.vue";
 
 const props = defineProps({
   api: { type: Object, required: true }
 });
+const accountEditor = ref(null);
 
 const envPath = ref("");
 const configItems = ref([]);
@@ -189,6 +324,28 @@ const configLabels = {
   REDIS_PORT: ["Redis 端口", "后端连接 Redis 的端口，修改需要重启服务。对应 REDIS_PORT。"],
   STORAGE_ROOT: ["文件存储目录", "作业上传、报告等文件的后端存储根目录，修改通常需要重启服务。对应 STORAGE_ROOT。"]
 };
+
+const configCategoryDefinitions = [
+  { key: "ai", label: "AI 模型" },
+  { key: "queue", label: "任务队列" },
+  { key: "database", label: "数据库" },
+  { key: "security", label: "安全认证" },
+  { key: "storage", label: "文件存储" },
+  { key: "system", label: "其他" }
+];
+
+const restartConfigCount = computed(() => configItems.value.filter((item) => item.restartRequired).length);
+const immediateConfigCount = computed(() => configItems.value.length - restartConfigCount.value);
+const teacherAccountCount = computed(() => accounts.value.filter((item) => item.role !== "admin").length);
+const adminAccountCount = computed(() => accounts.value.filter((item) => item.role === "admin").length);
+const configCategorySummaries = computed(() =>
+  configCategoryDefinitions
+    .map((category) => ({
+      ...category,
+      count: configItems.value.filter((item) => configCategoryKey(item.key) === category.key).length
+    }))
+    .filter((category) => category.count > 0)
+);
 
 const filteredAccounts = computed(() => {
   const keyword = accountSearch.value.trim().toLowerCase();
@@ -279,6 +436,12 @@ function editAccount(row) {
   Object.assign(accountForm, emptyAccount(), row, {
     initialPassword: ""
   });
+  nextTick(() => {
+    const editorElement = accountEditor.value?.$el || accountEditor.value;
+    editorElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+    editorElement?.querySelector("input")?.focus({ preventScroll: true });
+  });
+  ElMessage.info(`已载入 ${row.realName || row.username} 的账号资料`);
 }
 
 function resetForm() {
@@ -344,6 +507,20 @@ function configDescription(key) {
   return configLabels[key]?.[1] || `系统配置项，对应 ${key}。`;
 }
 
+function configCategoryKey(key) {
+  if (key.startsWith("DB_")) return "database";
+  if (key.startsWith("REDIS_") || key.includes("QUEUE") || key.includes("DISPATCH")) return "queue";
+  if (key.startsWith("JWT_")) return "security";
+  if (key.startsWith("STORAGE_")) return "storage";
+  if (key.startsWith("AI_") || key.startsWith("DEEPSEEK_") || key.startsWith("LOCAL_AI_")) return "ai";
+  return "system";
+}
+
+function configCategoryName(key) {
+  const categoryKey = configCategoryKey(key);
+  return configCategoryDefinitions.find((category) => category.key === categoryKey)?.label || "其他";
+}
+
 function normalizeConfigItems(items) {
   return items.map((item) => {
     if (item.inputType !== "number") {
@@ -379,3 +556,5 @@ function emptyAccount() {
   };
 }
 </script>
+
+<style src="../CSS/admin-pages.css"></style>

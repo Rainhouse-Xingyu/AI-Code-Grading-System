@@ -1,6 +1,6 @@
 <template>
   <div class="metric-card">
-    <span>{{ label }}</span>
+    <span class="metric-label"><i />{{ label }}</span>
     <strong>{{ value }}</strong>
   </div>
 </template>

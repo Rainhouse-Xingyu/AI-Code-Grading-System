@@ -1,0 +1,822 @@
+/* Teacher assignment and rubric-template workspaces */
+.assignment-page-panel,
+.rubric-template-page-panel {
+  gap: 20px;
+}
+
+.assignment-page-panel .module-intro,
+.rubric-template-page-panel .module-intro {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: center;
+  overflow: hidden;
+  padding: 20px 22px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius-lg);
+  background:
+    radial-gradient(circle at 90% 0%, rgba(124, 58, 237, 0.08), transparent 34%),
+    linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: var(--cg-shadow-card);
+}
+
+.assignment-page-panel .module-intro::before,
+.rubric-template-page-panel .module-intro::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--cg-primary), var(--cg-ai));
+  content: "";
+}
+
+.assignment-page-panel .module-intro-copy,
+.rubric-template-page-panel .module-intro-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.assignment-page-panel .module-kicker,
+.rubric-template-page-panel .module-kicker,
+.assignment-page-panel .panel-eyebrow,
+.rubric-template-page-panel .panel-eyebrow {
+  color: var(--cg-primary);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+}
+
+.assignment-page-panel .module-intro h3,
+.rubric-template-page-panel .module-intro h3 {
+  margin: 0;
+  color: var(--cg-ink);
+  font-size: 20px;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+}
+
+.assignment-page-panel .module-intro p,
+.rubric-template-page-panel .module-intro p {
+  max-width: 650px;
+  color: var(--cg-muted);
+  font-size: 13px;
+}
+
+.assignment-page-panel .module-summary-grid,
+.rubric-template-page-panel .module-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.assignment-page-panel .module-intro .metric-card,
+.rubric-template-page-panel .module-intro .metric-card {
+  min-width: 112px;
+  padding: 12px 14px;
+  border-color: rgba(203, 213, 225, 0.75);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: none;
+}
+
+.assignment-page-panel .module-intro .metric-card strong,
+.rubric-template-page-panel .module-intro .metric-card strong {
+  font-size: 21px;
+}
+
+.assignment-page-panel .panel-toolbar,
+.rubric-template-page-panel .panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.assignment-page-panel .panel-toolbar-main,
+.rubric-template-page-panel .panel-toolbar-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.assignment-page-panel .panel-toolbar-main > strong,
+.rubric-template-page-panel .panel-toolbar-main > strong {
+  color: var(--cg-ink);
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.assignment-page-panel .panel-toolbar-main > small,
+.rubric-template-page-panel .panel-toolbar-main > small {
+  overflow: hidden;
+  color: var(--cg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.assignment-page-panel .panel-toolbar-actions,
+.rubric-template-page-panel .panel-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.assignment-page-panel .data-panel,
+.rubric-template-page-panel .data-panel {
+  min-width: 0;
+}
+
+/* Assignment management */
+.assignment-page-panel .assignment-management-grid {
+  grid-template-columns: minmax(400px, 0.78fr) minmax(0, 1.42fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.assignment-page-panel .assignment-management-grid.assignment-list-only-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.assignment-page-panel .assignment-form-card .el-card__body,
+.assignment-page-panel .assignment-list-card .el-card__body {
+  min-height: 0;
+}
+
+.teacher-desk .assignment-page-panel .assignment-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.assignment-form-alert {
+  margin-bottom: 2px;
+}
+
+.assignment-form-section {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: #fbfcfe;
+}
+
+.form-section-heading,
+.assignment-stats-heading,
+.template-section-heading,
+.template-pane-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.form-section-heading > strong,
+.assignment-stats-heading strong,
+.template-section-heading strong,
+.template-pane-heading strong {
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.form-section-heading > span,
+.assignment-stats-heading span,
+.template-section-heading span,
+.template-pane-heading span {
+  color: var(--cg-muted);
+  font-size: 11px;
+}
+
+.assignment-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.assignment-field-grid .el-form-item,
+.assignment-template-field,
+.template-meta-form .el-form-item {
+  margin-bottom: 12px;
+}
+
+.assignment-field-grid .el-form-item:nth-last-child(-n + 2),
+.assignment-template-field:last-child,
+.template-meta-form .el-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.assignment-title-field,
+.assignment-class-field,
+.assignment-description-field,
+.assignment-deadline-field {
+  grid-column: 1 / -1;
+}
+
+.assignment-page-panel .el-select,
+.assignment-page-panel .el-date-editor,
+.assignment-page-panel .el-input-number {
+  width: 100%;
+}
+
+.assignment-rubric-section {
+  background: linear-gradient(145deg, #fbfcfe, #f8f7ff);
+}
+
+.assignment-page-panel .rubric-template-picker {
+  gap: 12px;
+  padding: 13px;
+  border-color: #ddd6fe;
+  border-radius: 10px;
+  background: rgba(245, 243, 255, 0.7);
+}
+
+.assignment-page-panel .template-picker-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.assignment-page-panel .template-picker-head > div > strong {
+  overflow: hidden;
+  color: #4c1d95;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assignment-page-panel .template-picker-head > div > span {
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assignment-page-panel .rubric-picker-summary {
+  padding-top: 10px;
+  border-top: 1px solid rgba(124, 58, 237, 0.12);
+}
+
+.assignment-page-panel .rubric-picker-summary span strong {
+  color: var(--cg-ai);
+  font-size: 15px;
+}
+
+.assignment-page-panel .assignment-actions {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cg-border);
+}
+
+.assignment-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.assignment-page-panel .destructive-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fffafa;
+}
+
+.assignment-page-panel .destructive-zone > span {
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.assignment-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: var(--cg-primary-soft);
+}
+
+.assignment-selection-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.assignment-selection-copy > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.assignment-selection-copy small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.assignment-selection-copy strong {
+  overflow: hidden;
+  color: #1e3a8a;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-indicator {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--cg-primary);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.11);
+}
+
+.assignment-table-wrap,
+.template-list-table-wrap,
+.template-item-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #edf1f6;
+  border-radius: 10px;
+}
+
+.assignment-table-wrap .el-table,
+.template-list-table-wrap .el-table,
+.template-item-table-wrap .el-table {
+  border-radius: 0;
+}
+
+.assignment-table-wrap .el-table__row.is-selected-assignment td.el-table__cell {
+  background: var(--cg-primary-soft) !important;
+}
+
+.assignment-table-wrap .el-table__row.is-selected-assignment td.el-table__cell:first-child {
+  box-shadow: inset 3px 0 0 var(--cg-primary);
+}
+
+.assignment-page-panel .assignment-stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--cg-border);
+}
+
+.assignment-stats-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.assignment-page-panel .assignment-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.assignment-page-panel .assignment-stats-grid .metric-card {
+  min-width: 0;
+  padding: 13px;
+  background: #fbfcfe;
+  box-shadow: none;
+}
+
+.assignment-page-panel .assignment-stats-grid .metric-card strong {
+  font-size: 20px;
+}
+
+.assignment-page-panel .empty-panel,
+.rubric-template-page-panel .empty-panel {
+  min-width: 0;
+  padding: 34px 12px;
+  background: #fbfcfe;
+}
+
+.rubric-picker-dialog .rubric-dialog-head {
+  align-items: flex-start;
+}
+
+.rubric-picker-dialog .rubric-dialog-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.rubric-picker-dialog .rubric-dialog-list {
+  gap: 10px;
+  padding: 14px;
+  border-color: var(--cg-border);
+  border-radius: 12px;
+}
+
+.rubric-picker-dialog .rubric-dialog-list .el-checkbox {
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rubric-picker-dialog .rubric-dialog-list .el-checkbox:hover {
+  border-color: #bfdbfe;
+  background: var(--cg-primary-soft);
+}
+
+.rubric-dialog-empty {
+  margin-top: 14px;
+  border: 1px dashed var(--cg-border-strong);
+  border-radius: 12px;
+}
+
+/* Rubric-template management */
+.rubric-workspace-toolbar {
+  align-items: flex-end;
+}
+
+.rubric-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rubric-template-page-panel .template-download-link {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+.rubric-template-page-panel .template-admin-grid {
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.template-list-pane,
+.template-editor-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: #fff;
+}
+
+.template-list-pane {
+  align-self: stretch;
+}
+
+.template-pane-heading,
+.template-section-heading,
+.template-item-toolbar {
+  min-height: 58px;
+  padding: 13px 15px;
+  border-bottom: 1px solid #edf1f6;
+  background: #fbfcfe;
+}
+
+.template-pane-heading > div,
+.template-section-heading > div:first-child,
+.template-item-toolbar > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.template-list-table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.template-list-table-wrap .el-table__row.is-selected-template td.el-table__cell {
+  background: var(--cg-primary-soft) !important;
+}
+
+.template-list-table-wrap .el-table__row.is-selected-template td.el-table__cell:first-child {
+  box-shadow: inset 3px 0 0 var(--cg-primary);
+  color: #1d4ed8;
+  font-weight: 650;
+}
+
+.template-status-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.template-status-control > span {
+  color: var(--cg-muted);
+  font-size: 11px;
+}
+
+.rubric-template-page-panel .template-editor {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.template-meta-section {
+  padding-bottom: 14px;
+}
+
+.template-editor-status {
+  display: flex !important;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 8px !important;
+  color: var(--cg-muted);
+  font-size: 11px;
+}
+
+.rubric-template-page-panel .template-meta-form {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.75fr) minmax(280px, 1.25fr);
+  gap: 0 12px;
+  align-items: end;
+  padding: 14px 15px 0;
+}
+
+.template-items-section {
+  display: grid;
+  min-width: 0;
+}
+
+.rubric-template-page-panel .template-item-toolbar {
+  align-items: center;
+  color: inherit;
+}
+
+.template-item-toolbar > div:first-child > strong {
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.template-item-toolbar > div:first-child > span {
+  color: var(--cg-muted);
+  font-size: 11px;
+}
+
+.template-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.template-item-table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.rubric-template-page-panel .template-item-table {
+  min-width: 850px;
+}
+
+.rubric-template-page-panel .template-item-table td.el-table__cell {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.rubric-template-page-panel .template-item-table .el-input-number {
+  width: 100%;
+}
+
+.template-list-empty,
+.template-items-empty {
+  min-height: 260px;
+}
+
+@media (max-width: 1180px) {
+  .assignment-page-panel .module-intro,
+  .rubric-template-page-panel .module-intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assignment-page-panel .module-summary-grid,
+  .rubric-template-page-panel .module-summary-grid {
+    width: 100%;
+  }
+
+  .assignment-page-panel .assignment-management-grid,
+  .rubric-template-page-panel .template-admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assignment-page-panel .assignment-form-card,
+  .assignment-page-panel .assignment-list-card {
+    width: 100%;
+  }
+
+  .rubric-template-page-panel .template-list-pane {
+    width: 100%;
+  }
+
+  .template-list-table-wrap .el-table {
+    height: 320px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .assignment-page-panel,
+  .rubric-template-page-panel {
+    gap: 14px;
+  }
+
+  .assignment-page-panel .module-intro,
+  .rubric-template-page-panel .module-intro {
+    gap: 16px;
+    padding: 17px;
+  }
+
+  .assignment-page-panel .panel-toolbar,
+  .rubric-template-page-panel .panel-toolbar,
+  .rubric-workspace-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assignment-page-panel .panel-toolbar-actions,
+  .rubric-template-page-panel .panel-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .rubric-toolbar-actions {
+    flex-wrap: nowrap;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 3px;
+  }
+
+  .rubric-toolbar-actions > * {
+    flex: 0 0 auto;
+  }
+
+  .assignment-page-panel .assignment-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rubric-template-page-panel .template-meta-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .template-item-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .template-item-actions {
+    justify-content: flex-start;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 3px;
+  }
+
+  .template-item-actions > * {
+    flex: 0 0 auto;
+  }
+
+  .rubric-picker-dialog .rubric-dialog-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rubric-picker-dialog .rubric-dialog-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .assignment-page-panel .module-intro,
+  .rubric-template-page-panel .module-intro {
+    padding: 15px 14px;
+  }
+
+  .assignment-page-panel .module-intro h3,
+  .rubric-template-page-panel .module-intro h3 {
+    font-size: 18px;
+  }
+
+  .rubric-template-page-panel .rubric-toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .rubric-toolbar-actions > *,
+  .rubric-toolbar-actions .el-button,
+  .rubric-toolbar-actions .el-upload {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .assignment-page-panel .module-summary-grid,
+  .rubric-template-page-panel .module-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .assignment-page-panel .module-intro .metric-card,
+  .rubric-template-page-panel .module-intro .metric-card {
+    min-width: 0;
+    gap: 6px;
+    padding: 10px 8px;
+  }
+
+  .assignment-page-panel .module-intro .metric-label,
+  .rubric-template-page-panel .module-intro .metric-label {
+    gap: 4px;
+    font-size: 10px !important;
+    white-space: nowrap;
+  }
+
+  .assignment-page-panel .module-intro .metric-card strong,
+  .rubric-template-page-panel .module-intro .metric-card strong {
+    font-size: 18px;
+  }
+
+  .assignment-form-section {
+    padding: 13px 12px;
+  }
+
+  .form-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .assignment-field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assignment-title-field,
+  .assignment-class-field,
+  .assignment-description-field,
+  .assignment-deadline-field {
+    grid-column: auto;
+  }
+
+  .assignment-field-grid .el-form-item:nth-last-child(-n + 2) {
+    margin-bottom: 12px;
+  }
+
+  .assignment-field-grid .el-form-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .assignment-primary-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assignment-primary-actions .el-button,
+  .assignment-destructive-zone .el-button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .assignment-page-panel .destructive-zone {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assignment-selection-bar {
+    align-items: flex-start;
+  }
+
+  .assignment-page-panel .assignment-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .assignment-page-panel .assignment-stats-grid .metric-card {
+    padding: 11px;
+  }
+
+  .template-section-heading {
+    align-items: flex-start;
+  }
+
+  .template-editor-status {
+    flex: 0 0 auto;
+  }
+
+  .template-pane-heading,
+  .template-section-heading,
+  .template-item-toolbar {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .rubric-template-page-panel .template-meta-form {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}

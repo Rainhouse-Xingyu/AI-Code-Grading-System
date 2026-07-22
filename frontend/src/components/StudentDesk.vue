@@ -1,69 +1,192 @@
 <template>
   <section class="desk student-desk">
-    <div class="page-heading">
-      <div>
-        <h2>学生端</h2>
-        <p>查看已发布作业、上传 ZIP、查看最终评分报告</p>
+    <header class="module-intro student-intro">
+      <div class="module-intro-copy">
+        <span class="module-kicker">学习空间</span>
+        <h2>我的作业</h2>
+        <p>选择已发布的作业，提交 ZIP 代码包，并在教师发布后查看最终成绩与评语。</p>
       </div>
-      <el-button @click="refresh">刷新</el-button>
+      <div class="module-intro-actions">
+        <el-button @click="refresh">刷新数据</el-button>
+      </div>
+    </header>
+
+    <div class="module-summary-grid student-summary-grid" aria-label="学习概览">
+      <MetricCard label="全部作业" :value="assignments.length" />
+      <MetricCard label="进行中" :value="activeAssignmentCount" />
+      <MetricCard label="提交记录" :value="submissions.length" />
+      <MetricCard label="已发布成绩" :value="publishedSubmissionCount" />
     </div>
 
-    <div class="grid two">
-      <el-card shadow="never">
-        <template #header>作业列表</template>
-        <el-table :data="assignments" height="300" highlight-current-row @current-change="selectAssignment">
-          <el-table-column prop="title" label="标题" min-width="160" />
-          <el-table-column prop="language" label="语言" width="100" />
-          <el-table-column prop="endTime" label="截止时间" min-width="170" />
-          <el-table-column label="迟交策略" width="130">
-            <template #default="{ row }">{{ latePolicyText(row) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag :type="assignmentStatusType(row)" size="small">{{ assignmentStatusText(row) }}</el-tag>
+    <div class="student-workspace-grid">
+      <el-card shadow="never" class="data-panel student-assignment-panel">
+        <template #header>
+          <div class="panel-toolbar">
+            <div class="panel-toolbar-main">
+              <strong>作业列表</strong>
+              <span>点击一行选择要提交或查看成绩的作业</span>
+            </div>
+            <div class="panel-toolbar-actions">
+              <el-tag size="small" type="info">{{ assignments.length }} 项</el-tag>
+            </div>
+          </div>
+        </template>
+
+        <div v-if="selectedAssignmentRow" class="student-current-assignment">
+          <div>
+            <span>当前选择</span>
+            <strong>{{ selectedAssignmentRow.title }}</strong>
+            <p>截止时间：{{ selectedAssignmentRow.endTime || "未设置" }}</p>
+          </div>
+          <el-tag :type="assignmentStatusType(selectedAssignmentRow)" size="small">
+            {{ assignmentStatusText(selectedAssignmentRow) }}
+          </el-tag>
+        </div>
+
+        <div class="student-table-scroll">
+          <el-table
+            :data="assignments"
+            height="310"
+            highlight-current-row
+            class="student-data-table assignment-table"
+            @current-change="selectAssignment"
+          >
+            <el-table-column prop="title" label="标题" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="language" label="语言" width="90" />
+            <el-table-column prop="endTime" label="截止时间" min-width="170" />
+            <el-table-column label="迟交策略" width="130">
+              <template #default="{ row }">{{ latePolicyText(row) }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="92">
+              <template #default="{ row }">
+                <el-tag :type="assignmentStatusType(row)" size="small">{{ assignmentStatusText(row) }}</el-tag>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty description="暂时没有已发布的作业" :image-size="72" />
             </template>
-          </el-table-column>
-        </el-table>
-        <el-upload :show-file-list="false" :auto-upload="false" :on-change="upload" accept=".zip" class="student-upload">
-          <el-button type="primary" :disabled="!selectedAssignment || selectedAssignmentExpired">上传 ZIP 作业</el-button>
-        </el-upload>
-        <el-progress
-          v-if="uploadProgress > 0 && uploadProgress < 100"
-          :percentage="uploadProgress"
-          class="upload-progress"
-        />
+          </el-table>
+        </div>
+
+        <div class="student-upload-zone">
+          <div class="student-upload-heading">
+            <div>
+              <strong>提交代码包</strong>
+              <span>仅支持 ZIP 文件，建议直接压缩项目中的 src 目录</span>
+            </div>
+            <el-tag v-if="selectedAssignmentExpired" type="info" size="small">作业已截止</el-tag>
+          </div>
+          <el-upload
+            drag
+            :disabled="!selectedAssignment || selectedAssignmentExpired"
+            :show-file-list="false"
+            :auto-upload="false"
+            :on-change="upload"
+            accept=".zip"
+            class="student-upload"
+          >
+            <div class="student-upload-content">
+              <span class="student-upload-mark">ZIP</span>
+              <div>
+                <strong>{{ selectedAssignment ? "拖拽 ZIP 到这里，或点击选择文件" : "请先从上方选择一项作业" }}</strong>
+                <span>{{ selectedAssignmentExpired ? "截止后无法继续提交" : "上传完成后将自动出现在右侧提交记录中" }}</span>
+              </div>
+            </div>
+          </el-upload>
+          <el-progress
+            v-if="uploadProgress > 0 && uploadProgress < 100"
+            :percentage="uploadProgress"
+            class="upload-progress"
+          />
+        </div>
       </el-card>
 
-      <el-card shadow="never">
-        <template #header>我的提交</template>
-        <el-table :data="submissions" height="300">
-          <el-table-column prop="fileName" label="文件" min-width="160" />
-          <el-table-column prop="submissionVersion" label="版本" width="70" />
-          <el-table-column prop="uploadTime" label="提交时间" min-width="170" />
-          <el-table-column prop="fileCount" label="代码文件" width="90" />
-          <el-table-column label="当前" width="70">
-            <template #default="{ row }">{{ row.current ? "是" : "否" }}</template>
-          </el-table-column>
-          <el-table-column label="迟交" width="70">
-            <template #default="{ row }">{{ row.late ? "是" : "否" }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
+      <el-card shadow="never" class="data-panel student-submission-panel">
+        <template #header>
+          <div class="panel-toolbar">
+            <div class="panel-toolbar-main">
+              <strong>我的提交</strong>
+              <span>保留历史版本，当前版本会用于后续评分</span>
+            </div>
+            <div class="panel-toolbar-actions">
+              <el-tag v-if="currentSubmission" :type="submissionStatusType(currentSubmission.status)" size="small">
+                {{ submissionStatusText(currentSubmission.status) }}
+              </el-tag>
+              <el-tag v-else size="small" type="info">暂无提交</el-tag>
+            </div>
+          </div>
+        </template>
+
+        <div class="student-table-scroll">
+          <el-table :data="submissions" height="390" class="student-data-table submission-table">
+            <el-table-column prop="fileName" label="文件" min-width="170" show-overflow-tooltip />
+            <el-table-column prop="submissionVersion" label="版本" width="70" />
+            <el-table-column prop="uploadTime" label="提交时间" min-width="170" />
+            <el-table-column prop="fileCount" label="代码文件" width="90" />
+            <el-table-column label="当前" width="70">
+              <template #default="{ row }">
+                <el-tag v-if="row.current" size="small" type="primary">当前</el-tag>
+                <span v-else class="student-muted-cell">历史</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="迟交" width="70">
+              <template #default="{ row }">
+                <el-tag v-if="row.late" size="small" type="warning">迟交</el-tag>
+                <span v-else class="student-muted-cell">否</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="成绩" width="90">
+              <template #default="{ row }">
+                <strong v-if="row.currentScore !== null && row.currentScore !== undefined" class="student-score-cell">
+                  {{ row.currentScore }}
+                </strong>
+                <span v-else class="student-muted-cell">待评分</span>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <el-empty description="提交 ZIP 后，记录会显示在这里" :image-size="72" />
             </template>
-          </el-table-column>
-          <el-table-column label="成绩" width="90">
-            <template #default="{ row }">{{ row.currentScore ?? "待评分" }}</template>
-          </el-table-column>
-        </el-table>
-        <el-button type="primary" class="student-grade-button" @click="loadGrade">查看成绩</el-button>
+          </el-table>
+        </div>
+
+        <div class="student-panel-footer">
+          <div>
+            <strong>{{ selectedAssignmentRow?.title || "尚未选择作业" }}</strong>
+            <span>成绩由教师复核并发布后可查看</span>
+          </div>
+          <el-button type="primary" class="student-grade-button" :disabled="!selectedAssignment" @click="loadGrade">
+            查看最终成绩
+          </el-button>
+        </div>
       </el-card>
     </div>
 
-    <el-card shadow="never" class="report-panel">
-      <template #header>最终报告</template>
+    <el-card shadow="never" class="data-panel report-panel student-report-panel">
+      <template #header>
+        <div class="panel-toolbar">
+          <div class="panel-toolbar-main">
+            <strong>最终成绩报告</strong>
+            <span>教师最终分、分项得分与完整 Markdown 反馈</span>
+          </div>
+          <div class="panel-toolbar-actions">
+            <el-tag :type="grade ? 'success' : 'info'" size="small">{{ grade ? "已发布" : "等待发布" }}</el-tag>
+          </div>
+        </div>
+      </template>
       <div v-if="grade" class="student-report">
         <aside class="student-score-panel">
+          <div class="student-section-heading">
+            <div>
+              <span>成绩概览</span>
+              <h3>{{ selectedAssignmentRow?.title || "当前作业" }}</h3>
+            </div>
+          </div>
+
           <div class="student-score-grid">
             <MetricCard label="教师最终分" :value="finalScoreText" />
             <MetricCard label="AI 初评分" :value="aiOriginalScoreText" />
@@ -77,25 +200,57 @@
             :description="scoreChangeDescription"
           />
 
-          <section v-if="teacherComment" class="teacher-comment">
-            <h3>教师评语</h3>
-            <p>{{ teacherComment }}</p>
+          <section class="teacher-comment" :class="{ 'is-empty': !teacherComment }">
+            <div class="student-section-heading compact">
+              <div>
+                <span>教师反馈</span>
+                <h3>教师评语</h3>
+              </div>
+            </div>
+            <p>{{ teacherComment || "教师暂未填写补充评语，请以右侧评分报告为准。" }}</p>
           </section>
 
-          <section v-if="dimensionScores.length" class="student-dimension-block">
-            <h3>分项得分</h3>
-            <el-table :data="dimensionScores" size="small" border>
-              <el-table-column prop="name" label="维度" min-width="120" />
-              <el-table-column label="得分" width="110">
-                <template #default="{ row }">{{ formatScore(row.score) }} / {{ formatScore(row.max_score) }}</template>
-              </el-table-column>
-              <el-table-column prop="comment" label="评语" min-width="180" show-overflow-tooltip />
-            </el-table>
+          <section class="student-dimension-block">
+            <div class="student-section-heading compact">
+              <div>
+                <span>评分明细</span>
+                <h3>分项得分</h3>
+              </div>
+              <el-tag size="small" type="info">{{ dimensionScores.length }} 项</el-tag>
+            </div>
+            <div v-if="dimensionScores.length" class="student-table-scroll dimension-table-scroll">
+              <el-table :data="dimensionScores" size="small" class="dimension-score-table">
+                <el-table-column prop="name" label="维度" min-width="120" />
+                <el-table-column label="得分" width="120">
+                  <template #default="{ row }">
+                    <strong class="student-dimension-score">
+                      {{ formatScore(row.score) }} <span>/ {{ formatScore(row.max_score) }}</span>
+                    </strong>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="comment" label="评语" min-width="180" show-overflow-tooltip />
+              </el-table>
+            </div>
+            <div v-else class="student-inline-empty">报告中暂无结构化分项得分</div>
           </section>
         </aside>
-        <article class="markdown-preview rendered-markdown" v-html="reportHtml"></article>
+
+        <article class="student-markdown-panel">
+          <div class="student-section-heading">
+            <div>
+              <span>完整反馈</span>
+              <h3>评分报告</h3>
+            </div>
+            <el-tag size="small" type="primary">Markdown</el-tag>
+          </div>
+          <div v-if="reportMarkdown" class="markdown-preview rendered-markdown" v-html="reportHtml"></div>
+          <el-empty v-else description="本次成绩没有附带 Markdown 报告" :image-size="88" />
+        </article>
       </div>
-      <el-empty v-else description="成绩发布后可在这里查看总分和 Markdown 报告" />
+      <div v-else class="empty-panel student-report-empty">
+        <el-empty :description="reportEmptyDescription" :image-size="104" />
+        <el-button v-if="selectedAssignment" type="primary" plain @click="loadGrade">重新查询成绩</el-button>
+      </div>
     </el-card>
   </section>
 </template>
@@ -116,8 +271,17 @@ const submissions = ref([]);
 const selectedAssignment = ref(null);
 const uploadProgress = ref(0);
 const grade = ref(null);
+let gradeRequestId = 0;
 const selectedAssignmentRow = computed(() => assignments.value.find((item) => item.id === selectedAssignment.value) || null);
 const selectedAssignmentExpired = computed(() => isExpired(selectedAssignmentRow.value));
+const activeAssignmentCount = computed(() => assignments.value.filter((item) => !isExpired(item) && item.status === "published").length);
+const publishedSubmissionCount = computed(() => submissions.value.filter((item) => item.status === "published").length);
+const currentSubmission = computed(() => submissions.value.find((item) => item.current) || submissions.value[0] || null);
+const reportEmptyDescription = computed(() =>
+  selectedAssignment.value
+    ? "该作业的成绩尚未发布，发布后可在这里查看总分和完整报告"
+    : "请先选择一项作业，再查询教师发布的最终成绩"
+);
 const teacherReview = computed(() => {
   const review = grade.value?.teacherReview;
   return review && typeof review === "object" && !Array.isArray(review) ? review : null;
@@ -160,12 +324,7 @@ async function refresh() {
 }
 
 function selectAssignment(row) {
-  if (isExpired(row)) {
-    selectedAssignment.value = null;
-    grade.value = null;
-    ElMessage.warning("作业已截止，不能选择或提交");
-    return;
-  }
+  gradeRequestId++;
   selectedAssignment.value = row?.id || null;
   grade.value = null;
 }
@@ -203,11 +362,18 @@ async function upload(uploadFile) {
 }
 
 async function loadGrade() {
-  if (!selectedAssignment.value) return;
+  const assignmentId = selectedAssignment.value;
+  if (!assignmentId) return;
+  const requestId = ++gradeRequestId;
   try {
-    grade.value = await props.api.get(`/api/v1/grade-publish/my-grade/${selectedAssignment.value}`);
+    const nextGrade = await props.api.get(`/api/v1/grade-publish/my-grade/${assignmentId}`);
+    if (requestId === gradeRequestId && String(selectedAssignment.value) === String(assignmentId)) {
+      grade.value = nextGrade;
+    }
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (requestId === gradeRequestId && String(selectedAssignment.value) === String(assignmentId)) {
+      ElMessage.error(messageOf(error));
+    }
   }
 }
 

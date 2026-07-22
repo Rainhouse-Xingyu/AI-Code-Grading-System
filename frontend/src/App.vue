@@ -3,38 +3,73 @@
     <AuthView @sign-in="signIn" />
   </main>
   <div v-else class="workspace">
-    <aside class="sidebar">
-      <div class="sidebar-title">
-        <el-icon><School /></el-icon>
-        <span>评分系统</span>
+    <button
+      v-if="sidebarOpen"
+      type="button"
+      class="sidebar-overlay"
+      aria-label="关闭导航"
+      @click="sidebarOpen = false"
+    />
+    <aside id="primary-sidebar" class="sidebar" :class="{ open: sidebarOpen }">
+      <div class="sidebar-brand">
+        <div class="sidebar-title">
+          <strong>CodeGrader</strong>
+          <span>教学评测工作台</span>
+        </div>
+        <button type="button" class="sidebar-close" aria-label="关闭导航" @click="sidebarOpen = false">
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
-      <el-button v-if="user.role !== 'student'" class="workspace-switch" :type="view === 'teacher' ? 'primary' : 'default'" plain @click="view = 'teacher'">
+      <div class="sidebar-section-label">工作空间</div>
+      <el-button v-if="user.role !== 'student'" class="workspace-switch" :type="view === 'teacher' ? 'primary' : 'default'" plain @click="switchView('teacher')">
         教师工作台
       </el-button>
-      <el-button v-if="user.role === 'admin'" class="workspace-switch" :type="view === 'admin' ? 'primary' : 'default'" plain @click="view = 'admin'">
+      <el-button v-if="user.role === 'admin'" class="workspace-switch" :type="view === 'admin' ? 'primary' : 'default'" plain @click="switchView('admin')">
         系统管理
       </el-button>
-      <el-button v-if="user.role === 'student'" class="workspace-switch" :type="view === 'student' ? 'primary' : 'default'" plain @click="view = 'student'">
+      <el-button v-if="user.role === 'student'" class="workspace-switch" :type="view === 'student' ? 'primary' : 'default'" plain @click="switchView('student')">
         学生端
       </el-button>
-      <nav v-if="view === 'teacher'" class="sidebar-nav">
+      <nav v-if="view === 'teacher'" class="sidebar-nav" aria-label="教师工作台模块">
+        <div class="sidebar-section-label">课程管理</div>
         <button
           v-for="item in teacherNavItems"
           :key="item.key"
           type="button"
           :class="{ active: teacherModule === item.key }"
-          @click="teacherModule = item.key"
+          :aria-current="teacherModule === item.key ? 'page' : undefined"
+          @click="selectTeacherModule(item.key)"
         >
           <el-icon><component :is="item.icon" /></el-icon>
           <span>{{ item.label }}</span>
         </button>
       </nav>
+      <div class="sidebar-mobile-actions">
+        <el-button plain @click="openProfileSettings">个人设置</el-button>
+        <el-button plain @click="signOut">退出登录</el-button>
+      </div>
+      <div class="sidebar-footer">
+        <span class="sidebar-status-dot" />
+        <span>服务运行正常</span>
+      </div>
     </aside>
     <section class="main">
       <header class="topbar">
-        <div>
-          <strong>{{ user.realName || user.username }}</strong>
-          <span>{{ userSubtitle }}</span>
+        <div class="topbar-context">
+          <button
+            type="button"
+            class="mobile-menu-button"
+            aria-label="打开导航"
+            aria-controls="primary-sidebar"
+            :aria-expanded="sidebarOpen"
+            @click="sidebarOpen = true"
+          >
+            <el-icon><Menu /></el-icon>
+          </button>
+          <div class="topbar-breadcrumb">
+            <span>{{ viewLabel }}</span>
+            <strong>{{ currentModuleLabel }}</strong>
+          </div>
         </div>
         <div class="topbar-actions">
           <el-alert
@@ -44,8 +79,15 @@
             :closable="false"
             show-icon
           />
-          <el-button @click="passwordDialogVisible = true">个人设置</el-button>
-          <el-button @click="signOut">退出</el-button>
+          <div class="topbar-user">
+            <span class="topbar-avatar" :style="{ backgroundColor: userAvatarColor }">{{ userInitial }}</span>
+            <div class="topbar-user-copy">
+              <strong>{{ user.realName || user.username }}</strong>
+              <span>{{ userSubtitle }}</span>
+            </div>
+          </div>
+          <el-button class="topbar-settings" @click="openProfileSettings">个人设置</el-button>
+          <el-button class="topbar-signout" @click="signOut">退出</el-button>
         </div>
       </header>
       <TeacherDesk v-if="view === 'teacher'" :api="api" :user="user" :active-module="teacherModule" @switch-module="teacherModule = $event" />
@@ -85,7 +127,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { Collection, Cpu, Download, EditPen, Files, School, UploadFilled, User } from "@element-plus/icons-vue";
+import { Close, Collection, Cpu, Download, EditPen, Files, Menu, UploadFilled, User } from "@element-plus/icons-vue";
 import { createApi, messageOf } from "./JS/api.js";
 import AuthView from "./components/AuthView.vue";
 import TeacherDesk from "./components/TeacherDesk.vue";
@@ -101,6 +143,7 @@ const lastActivityKey = "lastActivityAt";
 let idleTimer = null;
 const view = ref(user.value?.role === "student" ? "student" : "teacher");
 const teacherModule = ref("assignments");
+const sidebarOpen = ref(false);
 const api = computed(() => createApi(token.value, csrfToken.value, {
   onAuthUpdate: signIn,
   onAuthExpired: () => signOut("登录状态已失效，请重新登录"),
@@ -131,6 +174,27 @@ const teacherNavItems = computed(() => [
   { key: "downloads", label: "文件下载", icon: Download },
   { key: "review", label: "复核发布", icon: EditPen }
 ]);
+const viewLabel = computed(() => {
+  if (view.value === "admin") return "系统管理";
+  if (view.value === "student") return "学生空间";
+  return "教师工作台";
+});
+const currentModuleLabel = computed(() => {
+  if (view.value === "admin") return "运行配置与账号";
+  if (view.value === "student") return "作业与成绩";
+  return teacherNavItems.value.find((item) => item.key === teacherModule.value)?.label || "作业";
+});
+const avatarColors = ["#1d4ed8", "#0f766e", "#15803d", "#b45309", "#be123c", "#0369a1", "#4338ca"];
+const userDisplayName = computed(() => String(user.value?.realName || user.value?.username || "用").trim() || "用");
+const userInitial = computed(() => Array.from(userDisplayName.value)[0] || "用");
+const userAvatarColor = computed(() => {
+  const seed = String(user.value?.id ?? user.value?.username ?? userDisplayName.value);
+  let hash = 0;
+  for (const character of seed) {
+    hash = (hash * 31 + character.codePointAt(0)) >>> 0;
+  }
+  return avatarColors[hash % avatarColors.length];
+});
 const passwordDialogVisible = ref(false);
 const profileSaving = ref(false);
 const passwordSaving = ref(false);
@@ -178,6 +242,7 @@ function signIn(payload) {
   csrfToken.value = payload.csrfToken || "";
   user.value = payload.user;
   view.value = payload.user.role === "student" ? "student" : "teacher";
+  sidebarOpen.value = false;
   localStorage.setItem("token", payload.token);
   localStorage.setItem("csrfToken", csrfToken.value);
   localStorage.setItem("user", JSON.stringify(payload.user));
@@ -188,6 +253,7 @@ function signOut(message = "") {
   token.value = "";
   csrfToken.value = "";
   user.value = null;
+  sidebarOpen.value = false;
   localStorage.removeItem("token");
   localStorage.removeItem("csrfToken");
   localStorage.removeItem("user");
@@ -195,6 +261,23 @@ function signOut(message = "") {
   if (message) {
     ElMessage.warning(message);
   }
+}
+
+function switchView(nextView) {
+  view.value = nextView;
+  sidebarOpen.value = false;
+  window.scrollTo({ top: 0 });
+}
+
+function selectTeacherModule(moduleKey) {
+  teacherModule.value = moduleKey;
+  sidebarOpen.value = false;
+  window.scrollTo({ top: 0 });
+}
+
+function openProfileSettings() {
+  sidebarOpen.value = false;
+  passwordDialogVisible.value = true;
 }
 
 function markActivity() {

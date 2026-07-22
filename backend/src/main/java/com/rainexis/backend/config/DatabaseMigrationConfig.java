@@ -2,12 +2,15 @@ package com.rainexis.backend.config;
 
 import jakarta.annotation.PostConstruct;
 import java.util.List;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
+@DependsOnDatabaseInitialization
 public class DatabaseMigrationConfig {
     private static final Logger log = LoggerFactory.getLogger(DatabaseMigrationConfig.class);
 
@@ -195,12 +198,23 @@ public class DatabaseMigrationConfig {
     }
 
     private void addColumnIfMissing(String table, String column, String definition) {
+        String currentSchema = jdbcTemplate.execute((ConnectionCallback<String>) connection -> {
+            String productName = connection.getMetaData().getDatabaseProductName().toLowerCase();
+            if (productName.contains("mysql") || productName.contains("mariadb")) {
+                return connection.getCatalog();
+            }
+            return connection.getSchema();
+        });
+        if (currentSchema == null || currentSchema.isBlank()) {
+            throw new IllegalStateException("Unable to determine the current database schema");
+        }
         Integer count = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*)
                 FROM information_schema.columns
-                WHERE table_name = ?
-                  AND column_name = ?
-                """, Integer.class, table, column);
+                WHERE LOWER(table_schema) = LOWER(?)
+                  AND LOWER(table_name) = LOWER(?)
+                  AND LOWER(column_name) = LOWER(?)
+                """, Integer.class, currentSchema, table, column);
         if (count != null && count > 0) {
             return;
         }

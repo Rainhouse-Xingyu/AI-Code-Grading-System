@@ -1,0 +1,1016 @@
+/* Teacher workflow pages
+ * Loaded by TeacherDesk.vue so these page-level refinements stay independent
+ * from the shared Element Plus theme and the legacy teacher layout rules.
+ */
+
+.teacher-desk,
+.teacher-module-content,
+.teacher-module-panel,
+.teacher-desk .data-panel,
+.teacher-desk .table-shell {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.teacher-page-heading {
+  gap: 20px;
+}
+
+.teacher-page-heading .page-heading-copy {
+  min-width: min(100%, 420px);
+}
+
+.teacher-page-heading .semester-toolbar {
+  justify-content: flex-end;
+}
+
+.teacher-module-panel {
+  align-content: start;
+  gap: 18px;
+}
+
+.module-intro {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.72fr) minmax(520px, 1.28fr);
+  align-items: center;
+  gap: 24px;
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius-lg);
+  background:
+    radial-gradient(circle at 96% 4%, rgba(124, 58, 237, 0.08), transparent 31%),
+    linear-gradient(145deg, var(--cg-surface), #f8fbff);
+  box-shadow: var(--cg-shadow-card);
+}
+
+.module-intro-copy {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.module-intro-copy h3,
+.section-heading h3 {
+  margin: 0;
+  color: var(--cg-ink);
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+
+.module-intro-copy p,
+.section-heading > span {
+  margin: 0;
+  color: var(--cg-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.module-kicker {
+  color: var(--cg-primary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.3;
+}
+
+.module-summary-grid,
+.teacher-desk .submission-overview-grid,
+.teacher-desk .task-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+}
+
+.teacher-desk .task-progress-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.download-summary-grid,
+.review-summary-grid,
+.cleanup-summary,
+.token-quota-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.teacher-desk .module-summary-grid .metric-card {
+  min-width: 0;
+  min-height: 94px;
+  padding: 14px;
+}
+
+.teacher-desk .module-summary-grid .metric-card strong {
+  overflow: hidden;
+  font-size: clamp(19px, 1.7vw, 24px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teacher-desk .data-panel {
+  border-color: var(--cg-border);
+  border-radius: var(--cg-radius-lg);
+  box-shadow: var(--cg-shadow-card);
+}
+
+.teacher-desk .data-panel > .el-card__header {
+  padding: 16px 18px;
+  background: var(--cg-surface);
+}
+
+.teacher-desk .data-panel > .el-card__body {
+  padding: 18px;
+}
+
+.panel-toolbar,
+.selection-action-bar,
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.panel-toolbar-main,
+.selection-action-copy,
+.destructive-zone-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.panel-toolbar-main > strong,
+.selection-action-copy > strong,
+.destructive-zone-copy > strong {
+  color: var(--cg-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.panel-toolbar-main > span,
+.selection-action-copy > span,
+.destructive-zone-copy > span,
+.dialog-intro span {
+  color: var(--cg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel-toolbar-actions,
+.selection-action-controls,
+.review-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel-toolbar-actions .el-button + .el-button,
+.selection-action-controls .el-button + .el-button,
+.review-primary-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.selection-action-bar {
+  padding: 11px 13px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--cg-radius);
+  background: var(--cg-primary-soft);
+}
+
+.table-shell {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: var(--cg-surface);
+}
+
+.table-shell > .el-table {
+  width: 100%;
+  border-radius: 0;
+}
+
+.muted-cell {
+  color: var(--cg-muted);
+  font-size: 12px;
+}
+
+.score-cell {
+  color: var(--cg-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-panel {
+  min-height: 150px;
+  border: 1px dashed var(--cg-border-strong);
+  border-radius: var(--cg-radius);
+  background: #fbfcfe;
+}
+
+.compact-empty {
+  min-height: 170px;
+  padding: 16px 0;
+}
+
+/* Student roster */
+.students-data-panel > .el-card__body {
+  display: grid;
+  gap: 14px;
+}
+
+.student-filter-bar {
+  align-items: flex-end;
+  padding: 13px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: #f8fafc;
+}
+
+.student-filter-copy {
+  grid-template-columns: minmax(220px, 360px) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.teacher-desk .student-search-input {
+  width: 100%;
+}
+
+.teacher-desk .student-table {
+  margin-top: 0;
+}
+
+.storage-cleanup-panel.destructive-zone {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid #fecaca;
+  border-radius: var(--cg-radius-lg);
+  background: linear-gradient(145deg, var(--cg-surface), #fffafa);
+  box-shadow: var(--cg-shadow-card);
+}
+
+.destructive-zone .module-kicker,
+.destructive-zone-copy > strong {
+  color: #b91c1c;
+}
+
+.cleanup-toolbar .el-input-number {
+  width: 110px;
+}
+
+.teacher-desk .cleanup-summary {
+  margin: 0;
+}
+
+.teacher-desk .cleanup-empty {
+  min-height: 120px;
+}
+
+/* Submission grading */
+.submissions-module-panel .submissions-card {
+  height: auto;
+  min-height: 0;
+}
+
+.teacher-desk .submissions-card > .el-card__body {
+  display: grid;
+  flex: initial;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.submission-filters {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.submission-assignment-picker {
+  display: flex;
+  flex: 0 1 330px;
+  align-items: center;
+  gap: 8px;
+  min-width: 250px;
+}
+
+.submission-assignment-picker > span {
+  flex: 0 0 auto;
+  color: var(--cg-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.submission-assignment-select {
+  width: min(270px, 26vw);
+}
+
+.submission-selection-bar {
+  min-height: 62px;
+}
+
+.submissions-table-shell {
+  height: clamp(400px, calc(100vh - 430px), 620px);
+  min-height: 400px;
+}
+
+/* AI task operations */
+.task-module-intro {
+  grid-template-columns: minmax(250px, 0.62fr) minmax(580px, 1.38fr);
+}
+
+.task-data-panel > .el-card__body {
+  padding-top: 0;
+}
+
+.task-progress-band,
+.download-progress-band {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cg-border);
+}
+
+.task-progress-labels,
+.download-progress-band > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--cg-muted);
+  font-size: 12px;
+}
+
+.task-progress-labels strong {
+  color: var(--cg-ink);
+}
+
+.teacher-desk .task-batch-progress,
+.teacher-desk .package-download-progress {
+  margin: 0;
+}
+
+.task-insights-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  align-items: stretch;
+  gap: 18px;
+  min-width: 0;
+}
+
+.token-panel > .el-card__body,
+.task-log-panel > .el-card__body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.teacher-desk .token-quota-grid {
+  margin: 0;
+}
+
+.teacher-desk .quota-alert,
+.teacher-desk .token-stats-panel {
+  margin-top: 0;
+}
+
+.token-stats-tables {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.teacher-desk .log-box {
+  max-height: 365px;
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  background: #0b1220;
+}
+
+.teacher-desk .log-box p {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  color: #cbd5e1;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.55;
+}
+
+.teacher-desk .log-box p:last-child {
+  border-bottom: 0;
+}
+
+.teacher-desk .log-box p strong {
+  color: #93c5fd;
+}
+
+/* Download center */
+.downloads-data-panel > .el-card__body {
+  display: grid;
+  gap: 14px;
+}
+
+.download-assignment-picker,
+.review-assignment-picker {
+  display: flex;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.download-assignment-picker .review-assignment-select,
+.review-assignment-picker .review-assignment-select {
+  width: min(300px, 32vw);
+}
+
+/* Review and publish */
+.report-panel > .el-card__body {
+  padding: 0;
+}
+
+.review-workspace {
+  display: grid;
+  grid-template-columns: minmax(310px, 0.7fr) minmax(0, 2.3fr);
+  gap: 0;
+  align-items: stretch;
+  min-height: 720px;
+}
+
+.review-submission-list {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border-right: 1px solid var(--cg-border);
+  background: #fbfcfe;
+}
+
+.review-list-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-list-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.review-list-head strong {
+  color: var(--cg-ink);
+  font-size: 14px;
+}
+
+.review-list-head span {
+  color: var(--cg-muted);
+  font-size: 12px;
+}
+
+.review-list-table-shell {
+  align-self: start;
+}
+
+.review-detail {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.62fr) minmax(0, 2.38fr);
+  gap: 0;
+  align-items: start;
+  min-width: 0;
+}
+
+.review-meta-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border-right: 1px solid var(--cg-border);
+  background: var(--cg-surface);
+}
+
+.sticky-review-panel {
+  position: sticky;
+  top: 72px;
+  z-index: 2;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+}
+
+.review-current-student {
+  align-items: flex-start;
+}
+
+.review-current-student > div {
+  display: grid;
+  gap: 5px;
+}
+
+.review-current-student > div strong {
+  color: var(--cg-ink);
+  font-size: 18px;
+}
+
+.review-student-id {
+  margin: -8px 0 0;
+  color: var(--cg-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.review-score-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.review-score-summary .metric-card {
+  min-width: 0;
+  padding: 12px;
+}
+
+.review-score-summary .metric-card strong {
+  font-size: 20px;
+}
+
+.review-final-form .el-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.review-primary-actions .el-button {
+  flex: 1 1 110px;
+}
+
+.review-destructive-action.destructive-zone {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid #fecaca;
+  border-radius: var(--cg-radius);
+  background: #fffafa;
+}
+
+.review-destructive-action span {
+  color: #991b1b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.review-content-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  padding: 18px;
+  background: #f8fafc;
+}
+
+.review-content-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: var(--cg-surface);
+}
+
+.section-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.section-heading > strong {
+  color: var(--cg-primary);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-section-heading h3 {
+  font-size: 15px;
+}
+
+.markdown-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-editor-pane,
+.report-preview-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.pane-label {
+  color: var(--cg-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.teacher-desk .markdown-editor textarea,
+.teacher-desk .markdown-preview {
+  min-height: 390px;
+  max-height: 560px;
+}
+
+.teacher-desk .markdown-preview {
+  overflow: auto;
+  padding: 16px;
+}
+
+.review-empty-panel {
+  align-self: center;
+  min-height: 220px;
+  margin: 24px;
+}
+
+/* Workflow dialogs */
+.teacher-workflow-dialog .el-dialog__body {
+  max-height: min(76vh, 820px);
+  overflow-y: auto;
+}
+
+.dialog-intro {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: #f8fafc;
+}
+
+.dialog-intro strong {
+  color: var(--cg-ink);
+  font-size: 14px;
+}
+
+.teacher-workflow-dialog .dialog-table-shell {
+  overflow-x: auto;
+}
+
+.manual-scoring-dialog .manual-scoring-student {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--cg-radius);
+  background: var(--cg-primary-soft);
+}
+
+.manual-scoring-dialog .manual-issue-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--cg-border);
+}
+
+.manual-scoring-dialog .manual-score-total {
+  margin-right: auto;
+  color: var(--cg-primary);
+  font-weight: 750;
+}
+
+.destructive-dialog .semester-cleanup-confirm {
+  border-color: #fecaca;
+  border-radius: var(--cg-radius);
+  background: #fffafa;
+}
+
+.compare-panel {
+  gap: 16px;
+}
+
+.compare-selectors {
+  padding: 14px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: #f8fafc;
+}
+
+.report-compare-dialog .compare-columns section,
+.report-compare-dialog .compare-columns article {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--cg-border);
+  border-radius: var(--cg-radius);
+  background: var(--cg-surface);
+}
+
+.report-compare-dialog .compare-columns .markdown-preview {
+  max-height: 440px;
+  overflow: auto;
+}
+
+@media (max-width: 1280px) {
+  .module-intro,
+  .task-module-intro {
+    grid-template-columns: minmax(230px, 0.6fr) minmax(480px, 1.4fr);
+  }
+
+  .task-insights-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-workspace {
+    grid-template-columns: minmax(280px, 0.62fr) minmax(0, 2.38fr);
+  }
+
+  .review-detail {
+    grid-template-columns: minmax(230px, 0.58fr) minmax(0, 2.42fr);
+  }
+
+  .markdown-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1024px) {
+  .module-intro,
+  .task-module-intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teacher-desk .task-progress-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .panel-toolbar,
+  .selection-action-bar {
+    align-items: flex-start;
+  }
+
+  .review-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-submission-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--cg-border);
+  }
+
+  .review-list-table-shell .el-table {
+    height: 300px !important;
+  }
+
+  .review-detail {
+    grid-template-columns: minmax(230px, 0.7fr) minmax(0, 2.3fr);
+  }
+
+  .sticky-review-panel {
+    top: 64px;
+  }
+}
+
+@media (max-width: 768px) {
+  .teacher-page-heading .semester-toolbar,
+  .panel-toolbar,
+  .selection-action-bar,
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .teacher-page-heading .semester-toolbar {
+    flex-direction: row;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .teacher-page-heading .semester-toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  .module-intro {
+    padding: 18px;
+  }
+
+  .module-summary-grid,
+  .teacher-desk .submission-overview-grid,
+  .teacher-desk .task-progress-grid,
+  .download-summary-grid,
+  .review-summary-grid,
+  .cleanup-summary,
+  .token-quota-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .panel-toolbar-actions,
+  .selection-action-controls {
+    justify-content: flex-start;
+  }
+
+  .student-filter-copy {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cleanup-toolbar {
+    display: grid;
+    grid-template-columns: auto minmax(90px, 1fr) auto;
+    width: 100%;
+  }
+
+  .cleanup-toolbar .el-button {
+    grid-column: auto / span 1;
+  }
+
+  .submission-filters,
+  .download-assignment-picker,
+  .review-assignment-picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .submission-assignment-picker {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .submission-assignment-select,
+  .submission-query-input,
+  .submission-query-select,
+  .download-assignment-picker .review-assignment-select,
+  .review-assignment-picker .review-assignment-select {
+    width: 100%;
+  }
+
+  .submissions-table-shell {
+    height: 440px;
+  }
+
+  .token-stats-tables,
+  .review-detail,
+  .review-score-summary,
+  .compare-selectors,
+  .compare-summary-grid,
+  .compare-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-meta-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--cg-border);
+  }
+
+  .sticky-review-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .review-content-stack {
+    padding: 14px;
+  }
+
+  .review-content-panel {
+    padding: 14px;
+  }
+
+  .teacher-workflow-dialog .el-dialog__body {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .teacher-desk {
+    overflow-x: hidden;
+  }
+
+  .module-intro {
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .module-intro-copy h3 {
+    font-size: 17px;
+  }
+
+  .module-summary-grid,
+  .teacher-desk .submission-overview-grid,
+  .teacher-desk .task-progress-grid,
+  .download-summary-grid,
+  .review-summary-grid,
+  .cleanup-summary,
+  .token-quota-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teacher-desk .module-summary-grid .metric-card {
+    min-height: 82px;
+  }
+
+  .teacher-desk .data-panel > .el-card__header,
+  .teacher-desk .data-panel > .el-card__body {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .teacher-desk .panel-toolbar-actions,
+  .teacher-desk .selection-action-controls,
+  .teacher-desk .review-primary-actions,
+  .teacher-desk .download-all-actions,
+  .teacher-desk .review-history-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .teacher-desk .panel-toolbar-actions > *,
+  .teacher-desk .selection-action-controls > *,
+  .teacher-desk .review-primary-actions > *,
+  .teacher-desk .download-all-actions > *,
+  .teacher-desk .review-history-actions > * {
+    width: 100%;
+    margin: 0;
+  }
+
+  .panel-toolbar-actions .el-upload,
+  .panel-toolbar-actions .el-upload .el-button {
+    width: 100%;
+  }
+
+  .cleanup-toolbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .cleanup-toolbar .el-button {
+    grid-column: 1 / -1;
+  }
+
+  .table-shell {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .students-data-panel .table-shell > .el-table,
+  .submissions-table-shell > .el-table,
+  .task-table-shell > .el-table,
+  .downloads-table-shell > .el-table,
+  .cleanup-table-shell > .el-table,
+  .review-list-table-shell > .el-table,
+  .score-table-shell > .el-table,
+  .dialog-table-shell > .el-table {
+    min-width: 680px;
+  }
+
+  .review-submission-list,
+  .review-meta-panel {
+    padding: 14px;
+  }
+
+  .review-empty-panel {
+    margin: 14px;
+  }
+
+  .teacher-desk .markdown-editor textarea,
+  .teacher-desk .markdown-preview {
+    min-height: 320px;
+  }
+
+  .manual-scoring-dialog .manual-score-total {
+    display: block;
+    width: 100%;
+    margin: 0 0 8px;
+    text-align: left;
+  }
+}
+
+@media (max-width: 390px) {
+  .module-intro,
+  .storage-cleanup-panel.destructive-zone {
+    padding: 14px;
+  }
+
+  .selection-action-bar,
+  .student-filter-bar {
+    padding: 10px;
+  }
+
+  .review-content-stack,
+  .review-content-panel,
+  .review-submission-list,
+  .review-meta-panel {
+    padding: 12px;
+  }
+
+  .teacher-workflow-dialog .el-dialog__body {
+    padding: 14px 12px;
+  }
+}

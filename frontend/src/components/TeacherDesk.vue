@@ -1,11 +1,11 @@
 <template>
   <section class="desk teacher-desk">
-    <div class="page-heading">
-      <div>
-        <h2>教师工作台</h2>
+    <div class="page-heading teacher-page-heading">
+      <div class="page-heading-copy">
+        <h2>{{ activeTeacherModuleLabel }}</h2>
         <p>{{ teacherSubtitle }} · {{ selectedSemester?.name || "未选择学期" }} · 作业、评分与发布</p>
       </div>
-      <div class="toolbar">
+      <div class="toolbar semester-toolbar">
         <el-select v-model="selectedSemesterId" size="small" placeholder="选择学期" style="width: 160px" @change="changeSemester">
           <el-option v-for="semester in semesters" :key="semester.id" :label="`${semester.name}${semester.status === 'archived' ? '（已归档）' : ''}`" :value="semester.id" />
         </el-select>
@@ -47,107 +47,155 @@
           @template-change="onAssignmentTemplateChange"
         />
 
-        <section v-show="activeTeacherModule === 'students'" class="teacher-module-panel">
-      <el-card shadow="never">
-        <template #header>学生管理</template>
-        <div class="action-grid">
-          <el-input v-model="studentSearch" class="student-search-input" clearable placeholder="按学号/姓名/班级搜索" />
-          <el-button @click="downloadStudentTemplate">学生模板</el-button>
-          <el-upload :show-file-list="false" :auto-upload="false" :on-change="selectStudentFile" accept=".xls,.xlsx">
-            <el-button type="success">导入学生 Excel</el-button>
-          </el-upload>
-          <el-button type="warning" :disabled="!canResetFilteredStudents" @click="resetAllStudentPasswords">重置密码</el-button>
-          <el-button type="danger" :disabled="!studentSelection.length" @click="deleteSelectedStudents">删除所选</el-button>
-          <el-button :disabled="!rubric" @click="rubricPreviewVisible = true">预览 Rubric</el-button>
-        </div>
-        <div class="upload-progress-stack">
-          <el-progress v-if="studentUploadProgress > 0 && studentUploadProgress < 100" :percentage="studentUploadProgress" />
-        </div>
-        <el-table :data="filteredStudents" height="160" class="student-table" @selection-change="studentSelection = $event">
-          <el-table-column type="selection" width="48" />
-          <el-table-column prop="username" label="学号" min-width="100" />
-          <el-table-column prop="realName" label="姓名" min-width="90" />
-          <el-table-column prop="className" label="班级" min-width="110" />
-          <el-table-column label="操作" width="90">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="resetStudentPassword(row)">重置</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="metric-row">
-          <MetricCard label="学生" :value="students.length" />
-          <MetricCard label="作业" :value="assignments.length" />
-          <MetricCard label="Rubric" :value="rubric ? '已配置' : '待选择'" />
-        </div>
-        <div v-if="isAdmin" class="storage-cleanup-panel">
-          <div class="card-head">
-            <span>文件清理</span>
-            <div class="toolbar">
-              <span class="cleanup-age-label">超过</span>
-              <el-input-number
-                v-model="cleanupOlderThanDays"
-                :min="1"
-                :max="3650"
-                size="small"
-                :disabled="cleanupPreviewLoading || cleanupExecuting"
-                @change="resetCleanupPreview"
-              />
-              <span class="cleanup-age-label">天</span>
-              <el-button size="small" :loading="cleanupPreviewLoading" @click="previewFileCleanup">预览</el-button>
-              <el-button
-                size="small"
-                type="danger"
-                :loading="cleanupExecuting"
-                :disabled="cleanupPreviewLoading || cleanupExecuting || !cleanupPreviewIsCurrent || !cleanupPreview?.candidateCount"
-                @click="executeFileCleanup"
-              >
-                清理
-              </el-button>
+        <section v-show="activeTeacherModule === 'students'" class="teacher-module-panel students-module-panel">
+          <div class="module-intro">
+            <div class="module-intro-copy">
+              <span class="module-kicker">ROSTER MANAGEMENT</span>
+              <h3>学生名单与账号维护</h3>
+              <p>集中完成学生检索、名单导入和密码维护，并在批量操作前确认影响范围。</p>
+            </div>
+            <div class="module-summary-grid student-summary-grid">
+              <MetricCard label="学生总数" :value="students.length" />
+              <MetricCard label="当前结果" :value="filteredStudents.length" />
+              <MetricCard label="已选择" :value="studentSelection.length" />
+              <MetricCard label="关联作业" :value="assignments.length" />
             </div>
           </div>
-          <el-alert
-            v-if="cleanupPreview"
-            :title="cleanupPreviewMessage"
-            :type="cleanupPreview.candidateCount ? 'warning' : 'success'"
-            :closable="false"
-            show-icon
-          />
-          <div v-if="cleanupPreview" class="cleanup-summary">
-            <MetricCard label="候选文件" :value="cleanupPreview.candidateCount" />
-            <MetricCard label="候选容量" :value="formatBytes(cleanupPreview.candidateBytes)" />
-            <MetricCard label="已删文件" :value="cleanupPreview.deletedCount || 0" />
-          </div>
-          <el-table
-            v-if="cleanupPreview?.candidateFiles?.length"
-            :data="cleanupPreview.candidateFiles"
-            class="cleanup-file-table"
-            size="small"
-            max-height="220"
-          >
-            <el-table-column prop="fileName" label="文件名" min-width="180" show-overflow-tooltip />
-            <el-table-column label="类型" width="110">
-              <template #default="{ row }">{{ cleanupFileType(row.fileType) }}</template>
-            </el-table-column>
-            <el-table-column label="大小" width="100">
-              <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
-            </el-table-column>
-            <el-table-column prop="createdAt" label="上传时间" min-width="150" />
-            <el-table-column prop="relativePath" label="存储位置" min-width="220" show-overflow-tooltip />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.deletable ? 'success' : 'warning'" size="small">
-                  {{ row.deletable ? "可清理" : row.skipReason || "已跳过" }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty
-            v-else
-            class="cleanup-empty"
-            :description="cleanupPreview ? '没有符合条件的可清理文件' : '点击预览后显示可清理文件明细'"
-          />
-        </div>
-      </el-card>
+
+          <el-card shadow="never" class="data-panel students-data-panel">
+            <template #header>
+              <div class="panel-toolbar">
+                <div class="panel-toolbar-main">
+                  <strong>学生名单</strong>
+                  <span>支持按学号、姓名或班级快速筛选</span>
+                </div>
+                <div class="panel-toolbar-actions">
+                  <el-button @click="downloadStudentTemplate">下载模板</el-button>
+                  <el-upload :show-file-list="false" :auto-upload="false" :on-change="selectStudentFile" accept=".xls,.xlsx">
+                    <el-button type="primary" plain>导入学生 Excel</el-button>
+                  </el-upload>
+                  <el-button :disabled="!rubric" @click="rubricPreviewVisible = true">预览 Rubric</el-button>
+                </div>
+              </div>
+            </template>
+
+            <div class="student-filter-bar panel-toolbar">
+              <div class="panel-toolbar-main student-filter-copy">
+                <el-input v-model="studentSearch" class="student-search-input" clearable placeholder="搜索学号、姓名或班级" />
+                <span>共 {{ filteredStudents.length }} 条匹配记录</span>
+              </div>
+              <div class="panel-toolbar-actions">
+                <el-button type="warning" plain :disabled="!canResetFilteredStudents" @click="resetAllStudentPasswords">
+                  重置当前结果密码
+                </el-button>
+              </div>
+            </div>
+
+            <div v-if="studentSelection.length" class="selection-action-bar">
+              <div class="selection-action-copy">
+                <strong>已选择 {{ studentSelection.length }} 名学生</strong>
+                <span>批量删除会移除所选账号，请确认名单无误。</span>
+              </div>
+              <el-button type="danger" @click="deleteSelectedStudents">删除所选</el-button>
+            </div>
+
+            <div class="upload-progress-stack">
+              <el-progress v-if="studentUploadProgress > 0 && studentUploadProgress < 100" :percentage="studentUploadProgress" />
+            </div>
+            <div class="table-shell student-table-shell">
+              <el-table
+                :data="filteredStudents"
+                height="360"
+                class="student-table"
+                empty-text="没有符合条件的学生"
+                @selection-change="studentSelection = $event"
+              >
+                <el-table-column type="selection" width="48" />
+                <el-table-column prop="username" label="学号" min-width="120" />
+                <el-table-column prop="realName" label="姓名" min-width="100" />
+                <el-table-column prop="className" label="班级" min-width="140" />
+                <el-table-column label="账号操作" width="110" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="resetStudentPassword(row)">重置密码</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+
+          <section v-if="isAdmin" class="storage-cleanup-panel destructive-zone">
+            <div class="panel-toolbar">
+              <div class="panel-toolbar-main destructive-zone-copy">
+                <span class="module-kicker">STORAGE CLEANUP</span>
+                <strong>历史文件清理</strong>
+                <span>先生成预览清单，再执行不可逆的文件删除。</span>
+              </div>
+              <div class="panel-toolbar-actions cleanup-toolbar">
+                <span class="cleanup-age-label">保留最近</span>
+                <el-input-number
+                  v-model="cleanupOlderThanDays"
+                  :min="1"
+                  :max="3650"
+                  size="small"
+                  :disabled="cleanupPreviewLoading || cleanupExecuting"
+                  @change="resetCleanupPreview"
+                />
+                <span class="cleanup-age-label">天</span>
+                <el-button size="small" :loading="cleanupPreviewLoading" @click="previewFileCleanup">预览范围</el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  :loading="cleanupExecuting"
+                  :disabled="cleanupPreviewLoading || cleanupExecuting || !cleanupPreviewIsCurrent || !cleanupPreview?.candidateCount"
+                  @click="executeFileCleanup"
+                >
+                  执行清理
+                </el-button>
+              </div>
+            </div>
+            <el-alert
+              v-if="cleanupPreview"
+              :title="cleanupPreviewMessage"
+              :type="cleanupPreview.candidateCount ? 'warning' : 'success'"
+              :closable="false"
+              show-icon
+            />
+            <div v-if="cleanupPreview" class="cleanup-summary module-summary-grid">
+              <MetricCard label="候选文件" :value="cleanupPreview.candidateCount" />
+              <MetricCard label="候选容量" :value="formatBytes(cleanupPreview.candidateBytes)" />
+              <MetricCard label="已删文件" :value="cleanupPreview.deletedCount || 0" />
+            </div>
+            <div v-if="cleanupPreview?.candidateFiles?.length" class="table-shell cleanup-table-shell">
+              <el-table
+                :data="cleanupPreview.candidateFiles"
+                class="cleanup-file-table"
+                size="small"
+                max-height="260"
+              >
+                <el-table-column prop="fileName" label="文件名" min-width="180" show-overflow-tooltip />
+                <el-table-column label="类型" width="110">
+                  <template #default="{ row }">{{ cleanupFileType(row.fileType) }}</template>
+                </el-table-column>
+                <el-table-column label="大小" width="100">
+                  <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="上传时间" min-width="150" />
+                <el-table-column prop="relativePath" label="存储位置" min-width="220" show-overflow-tooltip />
+                <el-table-column label="状态" width="90">
+                  <template #default="{ row }">
+                    <el-tag :type="row.deletable ? 'success' : 'warning'" size="small">
+                      {{ row.deletable ? "可清理" : row.skipReason || "已跳过" }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <el-empty
+              v-else
+              class="cleanup-empty empty-panel"
+              :description="cleanupPreview ? '没有符合条件的可清理文件' : '点击预览后显示可清理文件明细'"
+            />
+          </section>
         </section>
 
         <RubricTemplatePanel
@@ -168,370 +216,586 @@
         />
 
         <section v-show="activeTeacherModule === 'submissions'" class="teacher-module-panel submissions-module-panel">
-      <el-card shadow="never" class="submissions-card">
-        <template #header>
-          <div class="card-head">
-            <span>提交记录</span>
-            <div class="toolbar">
-              <el-input
-                v-model="submissionQuery.studentNo"
-                size="small"
-                class="submission-query-input"
-                clearable
-                placeholder="学号"
-                @keyup.enter="refreshSubmissions"
-              />
-              <el-select
-                v-model="submissionQuery.status"
-                size="small"
-                clearable
-                class="submission-query-select"
-                placeholder="状态"
-              >
-                <el-option
-                  v-for="item in submissionStatusOptions"
-                  :key="item.value"
-                  :label="item.label"
-                  :value="item.value"
-                />
-              </el-select>
-              <el-button size="small" @click="refreshSubmissions">查询</el-button>
-              <el-checkbox v-model="jointReviewEnabled" size="small">联合评审</el-checkbox>
-              <el-button size="small" type="primary" @click="startScoring">批量评分</el-button>
-              <el-button size="small" @click="openManualScoring">手动评分</el-button>
-              <el-button size="small" type="success" @click="publishAllGrades">一键推送</el-button>
+          <div class="module-intro">
+            <div class="module-intro-copy">
+              <span class="module-kicker">GRADING QUEUE</span>
+              <h3>提交评分工作区</h3>
+              <p>筛选本次作业提交，选择学生后发起 AI 评分、手动评分或批量发布。</p>
+            </div>
+            <div class="submission-overview-grid module-summary-grid">
+              <MetricCard label="总提交" :value="submissionOverview.total" />
+              <MetricCard label="已评分" :value="submissionOverview.scored" />
+              <MetricCard label="AI 评分中" :value="submissionOverview.running" />
+              <MetricCard label="待处理" :value="submissionOverview.pending" />
             </div>
           </div>
-        </template>
-        <el-table
-          ref="scoringTable"
-          class="submissions-table"
-          :data="submissions"
-          height="100%"
-          row-key="id"
-          highlight-current-row
-          @current-change="selectSubmission"
-          @selection-change="selectScoringRows"
-        >
-          <el-table-column type="selection" width="44" />
-          <el-table-column prop="studentUsername" label="学号" width="100" />
-          <el-table-column prop="studentRealName" label="姓名" width="90" />
-          <el-table-column prop="fileName" label="文件" min-width="150" />
-          <el-table-column prop="submissionVersion" label="版本" width="70" />
-          <el-table-column label="状态" width="96">
-            <template #default="{ row }">
-              <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="迟交" width="70">
-            <template #default="{ row }">
-              <el-tag v-if="row.late" type="warning" size="small">是</el-tag>
-              <span v-else>否</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="发布" width="90">
-            <template #default="{ row }">
-              <el-tag :type="row.publishStatus === 1 ? 'success' : row.publishStatus === 2 ? 'info' : 'warning'" size="small">
-                {{ publishStatusText(row.publishStatus) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="170">
-            <template #default="{ row }">
-              <el-button link type="primary" @click.stop="downloadSubmission(row.id)">ZIP</el-button>
-              <el-button link type="warning" @click.stop="returnSubmission(row)">打回</el-button>
-              <el-button v-if="row.publishStatus !== 1" link type="primary" @click.stop="publishGrades([row])">推送</el-button>
-              <el-button v-if="row.publishStatus === 1" link type="danger" @click.stop="retractGrades([row])">撤回</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-        </section>
 
-        <section v-show="activeTeacherModule === 'tasks'" class="teacher-module-panel">
-      <el-card shadow="never">
-        <template #header>
-          <div class="card-head">
-            <span>AI 任务</span>
-            <div class="toolbar">
-              <el-tag v-if="scoringPolling" size="small" type="warning">轮询中</el-tag>
-              <el-button
-                v-if="canCancelCurrentScoring"
-                size="small"
-                type="danger"
-                :loading="cancellingScoring"
-                @click="cancelCurrentScoring"
-              >结束当前评分</el-button>
-            </div>
-          </div>
-        </template>
-        <div v-if="taskProgress" class="task-progress-grid">
-          <MetricCard label="全部任务" :value="taskProgress.total || 0" />
-          <MetricCard label="等待中" :value="taskProgress.statusCounts?.pending || 0" />
-          <MetricCard label="执行中" :value="`${taskProgress.statusCounts?.running || 0}/${taskProgress.maxConcurrentTasks || 0}`" />
-          <MetricCard label="已完成" :value="taskProgress.statusCounts?.success || 0" />
-          <MetricCard label="失败" :value="taskProgress.statusCounts?.failed || 0" />
-          <MetricCard label="已结束" :value="taskProgress.statusCounts?.cancelled || 0" />
-        </div>
-        <el-progress
-          v-if="taskProgress?.latestBatchTotal"
-          class="task-batch-progress"
-          :percentage="latestBatchPercent"
-          :status="taskProgress.latestBatchCounts?.failed ? 'exception' : undefined"
-        />
-        <el-table :data="tasks" height="210">
-          <el-table-column prop="id" label="任务" width="70" />
-          <el-table-column prop="batchId" label="批次" min-width="120" show-overflow-tooltip />
-          <el-table-column label="对应学生作业" min-width="190" show-overflow-tooltip>
-            <template #default="{ row }">
-              <el-tooltip :content="taskStudentDetail(row)" placement="top">
-                <span>{{ taskStudentText(row) }}</span>
-              </el-tooltip>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="96">
-            <template #default="{ row }">
-              <el-tag :type="taskStatusType(row.status)" size="small">{{ taskStatusText(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="120">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="loadTaskLogs(row.id)">日志</el-button>
-              <el-button v-if="row.status === 'failed'" link type="danger" @click="retryTask(row.id)">重试</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="tokenQuota" class="token-quota-grid">
-          <MetricCard label="DeepSeek 已用" :value="formatTokens(tokenQuota.usedTokens)" />
-          <MetricCard label="剩余配额" :value="formatTokens(tokenQuota.remainingTokens)" />
-          <MetricCard label="使用率" :value="`${tokenQuota.usagePercent || 0}%`" />
-        </div>
-        <el-alert
-          v-if="tokenQuota && tokenQuota.warningLevel !== 'normal'"
-          class="quota-alert"
-          :type="tokenQuota.quotaExceeded ? 'error' : 'warning'"
-          :closable="false"
-          :title="quotaWarningText"
-        />
-        <div v-if="tokenStats" class="token-stats-panel">
-          <div class="token-stats-head">
-            <span>Token 统计</span>
-            <strong>{{ formatTokens(tokenStats.totalTokens) }} / {{ tokenStats.reportCount || 0 }} 份</strong>
-          </div>
-          <el-table :data="tokenStats.byModel || []" size="small" max-height="150">
-            <el-table-column prop="modelName" label="模型" min-width="150" show-overflow-tooltip />
-            <el-table-column label="Token" width="92">
-              <template #default="{ row }">{{ formatTokens(row.tokenUsage) }}</template>
-            </el-table-column>
-            <el-table-column prop="reportCount" label="报告" width="70" />
-          </el-table>
-          <el-table :data="tokenStats.byAssignment || []" size="small" max-height="150">
-            <el-table-column prop="title" label="作业" min-width="140" show-overflow-tooltip />
-            <el-table-column label="Token" width="92">
-              <template #default="{ row }">{{ formatTokens(row.tokenUsage) }}</template>
-            </el-table-column>
-          </el-table>
-        </div>
-        <div v-if="taskLogs.length" class="log-box">
-          <p v-for="log in taskLogs" :key="log.id">
-            <strong>{{ log.level }}</strong>
-            <span v-if="log.modelName">[{{ log.modelName }}]</span>
-            {{ log.message }}
-            <span v-if="log.durationMs">· {{ log.durationMs }}ms</span>
-          </p>
-        </div>
-      </el-card>
-        </section>
-
-        <section v-show="activeTeacherModule === 'downloads'" class="teacher-module-panel">
-      <el-card shadow="never">
-        <template #header>
-          <div class="card-head">
-            <span>文件下载</span>
-            <div class="toolbar">
-              <el-select
-                v-model="selectedAssignment"
-                size="small"
-                filterable
-                class="review-assignment-select"
-                placeholder="选择作业"
-              >
-                <el-option
-                  v-for="assignment in assignments"
-                  :key="assignment.id"
-                  :label="assignment.title"
-                  :value="assignment.id"
-                />
-              </el-select>
-              <el-button size="small" :loading="packageDownloading" @click="downloadAllReports">全部报告</el-button>
-              <el-button size="small" :loading="packageDownloading" @click="downloadAllCodes">全部代码</el-button>
-              <el-button size="small" type="primary" :loading="packageDownloading" @click="downloadAllPackage">合并下载</el-button>
-              <el-button size="small" type="success" :loading="packageDownloading" @click="downloadScoreSheet">成绩表 Excel</el-button>
-              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedReports">
-                选中报告
-              </el-button>
-              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedCodes">
-                选中代码
-              </el-button>
-              <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedPackage">
-                选中合并
-              </el-button>
-            </div>
-          </div>
-          <el-progress
-            v-if="packageDownloadProgress > 0 && packageDownloadProgress < 100"
-            class="package-download-progress"
-            :percentage="packageDownloadProgress"
-          />
-        </template>
-        <el-table
-          ref="downloadTable"
-          :data="submissions"
-          height="360"
-          row-key="id"
-          @selection-change="selectDownloadRows"
-        >
-          <el-table-column type="selection" width="44" />
-          <el-table-column prop="studentUsername" label="学号" width="120" />
-          <el-table-column prop="studentRealName" label="姓名" width="110" />
-          <el-table-column prop="fileName" label="文件" min-width="170" show-overflow-tooltip />
-          <el-table-column label="状态" width="96">
-            <template #default="{ row }">
-              <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="160">
-            <template #default="{ row }">
-              <el-button link type="primary" @click.stop="downloadReport(row.id)">报告</el-button>
-              <el-button link type="primary" @click.stop="downloadSubmission(row.id)">代码</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
-        </section>
-
-        <section v-show="activeTeacherModule === 'review'" class="teacher-module-panel">
-    <el-card shadow="never" class="report-panel">
-      <template #header>
-        <div class="card-head">
-          <span>评分详情与复核</span>
-          <div class="toolbar">
-            <el-select
-              v-model="selectedAssignment"
-              size="small"
-              filterable
-              class="review-assignment-select"
-              placeholder="选择作业"
-            >
-              <el-option
-                v-for="assignment in assignments"
-                :key="assignment.id"
-                :label="assignment.title"
-                :value="assignment.id"
-              />
-            </el-select>
-            <el-button @click="loadReportHistory">历史报告</el-button>
-            <el-button @click="loadReviewHistory">复核历史</el-button>
-            <el-button @click="saveReview">保存复核</el-button>
-            <el-button type="primary" @click="publishGrades">{{ publishButtonText }}</el-button>
-            <el-button type="warning" @click="retractGrades()">撤回成绩</el-button>
-          </div>
-        </div>
-      </template>
-      <div class="review-workspace">
-        <aside class="review-submission-list">
-          <div class="review-list-head">
-            <strong>AI 已评分作业</strong>
-            <span>{{ reviewSubmissionRows.length }} 份</span>
-          </div>
-          <el-table
-            :data="reviewSubmissionRows"
-            height="360"
-            highlight-current-row
-            :row-class-name="reviewRowClassName"
-            @row-click="openReviewSubmission"
-          >
-            <el-table-column prop="studentUsername" label="学号" min-width="92" show-overflow-tooltip />
-            <el-table-column prop="studentRealName" label="姓名" min-width="82" show-overflow-tooltip />
-            <el-table-column label="AI分" width="72">
-              <template #default="{ row }">{{ scoreText(row.currentScore) }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="82">
-              <template #default="{ row }">
-                <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-if="!reviewSubmissionRows.length" description="当前作业还没有 AI 评分报告" />
-        </aside>
-
-        <div v-if="report" class="review-detail">
-          <section class="review-meta-panel">
-            <div class="review-current-student">
-              <strong>{{ selectedSubmissionRow?.studentRealName || "已选学生" }}</strong>
-              <span>{{ selectedSubmissionRow?.studentUsername || "" }}</span>
-            </div>
-            <MetricCard label="AI 总分" :value="report.totalScore" />
-            <el-form label-position="top">
-              <el-form-item label="最终分">
-                <el-input v-model="finalScore" />
-              </el-form-item>
-              <el-form-item label="教师评语">
-                <el-input v-model="reviewComment" type="textarea" :rows="6" />
-              </el-form-item>
-            </el-form>
-          </section>
-          <section class="markdown-editor-grid">
-            <el-input v-model="reportMarkdown" type="textarea" :rows="18" class="markdown-editor" />
-            <article class="markdown-preview rendered-markdown" v-html="reportHtml"></article>
-          </section>
-          <section class="review-score-panel">
-            <el-table :data="dimensionScores" class="dimension-table" size="small" border>
-              <el-table-column prop="name" label="评分维度" min-width="110" />
-              <el-table-column label="得分" width="120">
-                <template #default="{ row }">
-                  <el-input-number
-                    v-model="row.score"
-                    :min="0"
-                    :max="Number(row.max_score || row.maxScore || 100)"
-                    :precision="2"
-                    controls-position="right"
+          <el-card shadow="never" class="submissions-card data-panel">
+            <template #header>
+              <div class="panel-toolbar submissions-toolbar">
+                <div class="panel-toolbar-main submission-filters">
+                  <div class="submission-assignment-picker">
+                    <span>评分作业</span>
+                    <el-select
+                      v-model="selectedAssignment"
+                      :loading="assignmentsLoading"
+                      :disabled="assignmentsLoading || !assignments.length"
+                      size="small"
+                      filterable
+                      class="submission-assignment-select"
+                      placeholder="选择评分作业"
+                      no-data-text="当前学期暂无作业"
+                    >
+                      <el-option
+                        v-for="assignment in assignments"
+                        :key="assignment.id"
+                        :label="`${assignment.title || '未命名作业'}${assignment.status === 'draft' ? '（草稿）' : ''}`"
+                        :value="assignment.id"
+                      />
+                    </el-select>
+                  </div>
+                  <el-input
+                    v-model="submissionQuery.studentNo"
                     size="small"
+                    class="submission-query-input"
+                    clearable
+                    placeholder="搜索学号"
+                    @keyup.enter="refreshSubmissions"
                   />
-                </template>
-              </el-table-column>
-              <el-table-column label="满分" width="70">
-                <template #default="{ row }">{{ row.max_score ?? row.maxScore ?? 100 }}</template>
-              </el-table-column>
-              <el-table-column prop="comment" label="评语" min-width="360">
-                <template #default="{ row }">
-                  <el-input v-model="row.comment" type="textarea" :rows="2" size="small" />
-                </template>
-              </el-table-column>
-            </el-table>
-            <section v-if="issueRows.length" class="issue-block">
-              <h3>问题列表</h3>
-              <el-table :data="issueRows" class="issue-table" size="small" border>
-                <el-table-column label="级别" width="80">
+                  <el-select
+                    v-model="submissionQuery.status"
+                    size="small"
+                    clearable
+                    class="submission-query-select"
+                    placeholder="全部状态"
+                  >
+                    <el-option
+                      v-for="item in submissionStatusOptions"
+                      :key="item.value"
+                      :label="item.label"
+                      :value="item.value"
+                    />
+                  </el-select>
+                  <el-button
+                    size="small"
+                    :loading="submissionsLoading"
+                    :disabled="!selectedAssignment"
+                    @click="refreshSubmissions"
+                  >查询</el-button>
+                </div>
+                <div class="panel-toolbar-actions">
+                  <el-button
+                    size="small"
+                    type="success"
+                    :disabled="!selectedAssignment || submissionsLoading || !submissions.length"
+                    @click="publishAllGrades"
+                  >一键推送全部成绩</el-button>
+                </div>
+              </div>
+            </template>
+
+            <div class="selection-action-bar submission-selection-bar">
+              <div class="selection-action-copy">
+                <strong>已选择 {{ scoringSelection.length }} 份提交</strong>
+                <span>{{ selectedSubmissionRow ? `当前：${selectedSubmissionRow.studentRealName || selectedSubmissionRow.studentUsername}` : "单击一行可设为当前提交" }}</span>
+              </div>
+              <div class="selection-action-controls">
+                <el-checkbox v-model="jointReviewEnabled" size="small">联合评审</el-checkbox>
+                <el-button size="small" type="primary" @click="startScoring">批量 AI 评分</el-button>
+                <el-button size="small" @click="openManualScoring">手动评分</el-button>
+              </div>
+            </div>
+
+            <div v-loading="submissionsLoading" class="table-shell submissions-table-shell">
+              <el-table
+                ref="scoringTable"
+                class="submissions-table"
+                :data="submissions"
+                height="100%"
+                row-key="id"
+                highlight-current-row
+                :empty-text="submissionEmptyText"
+                @current-change="selectSubmission"
+                @selection-change="selectScoringRows"
+              >
+                <el-table-column type="selection" width="44" />
+                <el-table-column prop="studentUsername" label="学号" width="110" />
+                <el-table-column prop="studentRealName" label="姓名" width="100" />
+                <el-table-column prop="fileName" label="提交文件" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="submissionVersion" label="版本" width="70" />
+                <el-table-column label="评分状态" width="104">
                   <template #default="{ row }">
-                    <el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
+                    <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column prop="file" label="文件" min-width="140" show-overflow-tooltip />
-                <el-table-column prop="line" label="行" width="64" />
-                <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
+                <el-table-column label="迟交" width="70">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.late" type="warning" size="small">迟交</el-tag>
+                    <span v-else class="muted-cell">正常</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="发布状态" width="100">
+                  <template #default="{ row }">
+                    <el-tag :type="row.publishStatus === 1 ? 'success' : row.publishStatus === 2 ? 'info' : 'warning'" size="small">
+                      {{ publishStatusText(row.publishStatus) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="180" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click.stop="downloadSubmission(row.id)">代码</el-button>
+                    <el-button link type="warning" @click.stop="returnSubmission(row)">打回</el-button>
+                    <el-button v-if="row.publishStatus !== 1" link type="primary" @click.stop="publishGrades([row])">推送</el-button>
+                    <el-button v-if="row.publishStatus === 1" link type="danger" @click.stop="retractGrades([row])">撤回</el-button>
+                  </template>
+                </el-table-column>
               </el-table>
-            </section>
-          </section>
-        </div>
-        <el-empty v-else description="点击左侧学生作业查看 AI 评分报告" />
-      </div>
-    </el-card>
+            </div>
+          </el-card>
+        </section>
+
+        <section v-show="activeTeacherModule === 'tasks'" class="teacher-module-panel tasks-module-panel">
+          <div class="module-intro task-module-intro">
+            <div class="module-intro-copy">
+              <span class="module-kicker">AI OPERATIONS</span>
+              <h3>AI 评分任务监控</h3>
+              <p>跟踪队列、批次进度与模型用量；失败任务可在任务列表中直接重试。</p>
+            </div>
+            <div v-if="taskProgress" class="task-progress-grid module-summary-grid">
+              <MetricCard label="全部任务" :value="taskProgress.total || 0" />
+              <MetricCard label="等待中" :value="taskProgress.statusCounts?.pending || 0" />
+              <MetricCard label="执行中" :value="`${taskProgress.statusCounts?.running || 0}/${taskProgress.maxConcurrentTasks || 0}`" />
+              <MetricCard label="已完成" :value="taskProgress.statusCounts?.success || 0" />
+              <MetricCard label="失败" :value="taskProgress.statusCounts?.failed || 0" />
+              <MetricCard label="已结束" :value="taskProgress.statusCounts?.cancelled || 0" />
+            </div>
+          </div>
+
+          <el-card shadow="never" class="data-panel task-data-panel">
+            <template #header>
+              <div class="panel-toolbar">
+                <div class="panel-toolbar-main">
+                  <strong>任务队列</strong>
+                  <span v-if="taskProgress?.latestBatchTotal">最近批次已完成 {{ latestBatchPercent }}%</span>
+                  <span v-else>选择任务可查看完整运行日志</span>
+                </div>
+                <div class="panel-toolbar-actions">
+                  <el-tag v-if="scoringPolling" size="small" type="warning" effect="light">实时同步中</el-tag>
+                  <el-button
+                    v-if="canCancelCurrentScoring"
+                    class="task-stop-button"
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="cancellingScoring"
+                    @click="cancelCurrentScoring"
+                  >结束当前评分</el-button>
+                </div>
+              </div>
+              <div v-if="taskProgress?.latestBatchTotal" class="task-progress-band">
+                <div class="task-progress-labels">
+                  <span>最近批次进度</span>
+                  <strong>{{ latestBatchPercent }}%</strong>
+                </div>
+                <el-progress
+                  class="task-batch-progress"
+                  :percentage="latestBatchPercent"
+                  :status="taskProgress.latestBatchCounts?.failed ? 'exception' : undefined"
+                  :show-text="false"
+                />
+              </div>
+            </template>
+
+            <div class="table-shell task-table-shell">
+              <el-table :data="tasks" height="300" empty-text="当前作业还没有 AI 评分任务">
+                <el-table-column prop="id" label="任务" width="76" />
+                <el-table-column prop="batchId" label="批次" min-width="150" show-overflow-tooltip />
+                <el-table-column label="对应学生作业" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <el-tooltip :content="taskStudentDetail(row)" placement="top">
+                      <span>{{ taskStudentText(row) }}</span>
+                    </el-tooltip>
+                  </template>
+                </el-table-column>
+                <el-table-column label="任务状态" width="104">
+                  <template #default="{ row }">
+                    <el-tag :type="taskStatusType(row.status)" size="small">{{ taskStatusText(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="130" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="loadTaskLogs(row.id)">查看日志</el-button>
+                    <el-button v-if="row.status === 'failed'" link type="danger" @click="retryTask(row.id)">重试</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+
+          <div class="task-insights-grid">
+            <el-card shadow="never" class="data-panel token-panel">
+              <template #header>
+                <div class="panel-toolbar">
+                  <div class="panel-toolbar-main">
+                    <strong>模型用量</strong>
+                    <span>DeepSeek 配额与报告消耗概览</span>
+                  </div>
+                </div>
+              </template>
+              <div v-if="tokenQuota" class="token-quota-grid module-summary-grid">
+                <MetricCard label="DeepSeek 已用" :value="formatTokens(tokenQuota.usedTokens)" />
+                <MetricCard label="剩余配额" :value="formatTokens(tokenQuota.remainingTokens)" />
+                <MetricCard label="使用率" :value="`${tokenQuota.usagePercent || 0}%`" />
+              </div>
+              <el-alert
+                v-if="tokenQuota && tokenQuota.warningLevel !== 'normal'"
+                class="quota-alert"
+                :type="tokenQuota.quotaExceeded ? 'error' : 'warning'"
+                :closable="false"
+                :title="quotaWarningText"
+              />
+              <div v-if="tokenStats" class="token-stats-panel">
+                <div class="token-stats-head">
+                  <span>Token 统计</span>
+                  <strong>{{ formatTokens(tokenStats.totalTokens) }} / {{ tokenStats.reportCount || 0 }} 份报告</strong>
+                </div>
+                <div class="token-stats-tables">
+                  <div class="table-shell">
+                    <el-table :data="tokenStats.byModel || []" size="small" max-height="180" empty-text="暂无模型统计">
+                      <el-table-column prop="modelName" label="模型" min-width="150" show-overflow-tooltip />
+                      <el-table-column label="Token" width="92">
+                        <template #default="{ row }">{{ formatTokens(row.tokenUsage) }}</template>
+                      </el-table-column>
+                      <el-table-column prop="reportCount" label="报告" width="70" />
+                    </el-table>
+                  </div>
+                  <div class="table-shell">
+                    <el-table :data="tokenStats.byAssignment || []" size="small" max-height="180" empty-text="暂无作业统计">
+                      <el-table-column prop="title" label="作业" min-width="140" show-overflow-tooltip />
+                      <el-table-column label="Token" width="92">
+                        <template #default="{ row }">{{ formatTokens(row.tokenUsage) }}</template>
+                      </el-table-column>
+                    </el-table>
+                  </div>
+                </div>
+              </div>
+              <el-empty v-else class="empty-panel compact-empty" description="暂无 Token 使用统计" />
+            </el-card>
+
+            <el-card shadow="never" class="data-panel task-log-panel">
+              <template #header>
+                <div class="panel-toolbar">
+                  <div class="panel-toolbar-main">
+                    <strong>运行日志</strong>
+                    <span>展示当前选中任务的执行详情</span>
+                  </div>
+                </div>
+              </template>
+              <div v-if="taskLogs.length" class="log-box">
+                <p v-for="log in taskLogs" :key="log.id">
+                  <strong>{{ log.level }}</strong>
+                  <span v-if="log.modelName">[{{ log.modelName }}]</span>
+                  {{ log.message }}
+                  <span v-if="log.durationMs">· {{ log.durationMs }}ms</span>
+                </p>
+              </div>
+              <el-empty v-else class="empty-panel compact-empty" description="点击任务行中的“查看日志”" />
+            </el-card>
+          </div>
+        </section>
+
+        <section v-show="activeTeacherModule === 'downloads'" class="teacher-module-panel downloads-module-panel">
+          <div class="module-intro">
+            <div class="module-intro-copy">
+              <span class="module-kicker">EXPORT CENTER</span>
+              <h3>作业文件与成绩导出</h3>
+              <p>按作业导出完整资料，或勾选学生后生成指定范围的报告与代码包。</p>
+            </div>
+            <div class="module-summary-grid download-summary-grid">
+              <MetricCard label="可下载提交" :value="submissions.length" />
+              <MetricCard label="已选择" :value="downloadSelection.length" />
+              <MetricCard label="作业数量" :value="assignments.length" />
+            </div>
+          </div>
+
+          <el-card shadow="never" class="data-panel downloads-data-panel">
+            <template #header>
+              <div class="panel-toolbar downloads-toolbar">
+                <div class="panel-toolbar-main download-assignment-picker">
+                  <strong>选择导出作业</strong>
+                  <el-select
+                    v-model="selectedAssignment"
+                    size="small"
+                    filterable
+                    class="review-assignment-select"
+                    placeholder="选择作业"
+                  >
+                    <el-option
+                      v-for="assignment in assignments"
+                      :key="assignment.id"
+                      :label="assignment.title"
+                      :value="assignment.id"
+                    />
+                  </el-select>
+                </div>
+                <div class="panel-toolbar-actions download-all-actions">
+                  <el-button size="small" :loading="packageDownloading" @click="downloadAllReports">全部报告</el-button>
+                  <el-button size="small" :loading="packageDownloading" @click="downloadAllCodes">全部代码</el-button>
+                  <el-button size="small" type="primary" :loading="packageDownloading" @click="downloadAllPackage">合并下载</el-button>
+                  <el-button size="small" type="success" :loading="packageDownloading" @click="downloadScoreSheet">成绩表 Excel</el-button>
+                </div>
+              </div>
+              <div v-if="packageDownloadProgress > 0 && packageDownloadProgress < 100" class="download-progress-band">
+                <span>正在生成下载文件</span>
+                <el-progress
+                  class="package-download-progress"
+                  :percentage="packageDownloadProgress"
+                />
+              </div>
+            </template>
+
+            <div class="selection-action-bar download-selection-bar">
+              <div class="selection-action-copy">
+                <strong>已选择 {{ downloadSelection.length }} 份提交</strong>
+                <span>选中导出只包含当前勾选学生的最新提交。</span>
+              </div>
+              <div class="selection-action-controls">
+                <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedReports">
+                  下载选中报告
+                </el-button>
+                <el-button size="small" :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedCodes">
+                  下载选中代码
+                </el-button>
+                <el-button size="small" type="primary" plain :disabled="!downloadSelection.length" :loading="packageDownloading" @click="downloadSelectedPackage">
+                  选中合并下载
+                </el-button>
+              </div>
+            </div>
+
+            <div class="table-shell downloads-table-shell">
+              <el-table
+                ref="downloadTable"
+                :data="submissions"
+                height="420"
+                row-key="id"
+                empty-text="当前作业还没有可下载的提交"
+                @selection-change="selectDownloadRows"
+              >
+                <el-table-column type="selection" width="44" />
+                <el-table-column prop="studentUsername" label="学号" width="120" />
+                <el-table-column prop="studentRealName" label="姓名" width="110" />
+                <el-table-column prop="fileName" label="提交文件" min-width="210" show-overflow-tooltip />
+                <el-table-column label="评分状态" width="104">
+                  <template #default="{ row }">
+                    <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="单份下载" width="160" fixed="right">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click.stop="downloadReport(row.id)">评分报告</el-button>
+                    <el-button link type="primary" @click.stop="downloadSubmission(row.id)">代码包</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-card>
+        </section>
+
+        <section v-show="activeTeacherModule === 'review'" class="teacher-module-panel review-module-panel">
+          <div class="module-intro">
+            <div class="module-intro-copy">
+              <span class="module-kicker">REVIEW &amp; RELEASE</span>
+              <h3>教师复核与成绩发布</h3>
+              <p>左侧选择学生，右侧核对 AI 报告、调整分项得分并完成最终发布。</p>
+            </div>
+            <div class="module-summary-grid review-summary-grid">
+              <MetricCard label="待复核报告" :value="reviewSubmissionRows.length" />
+              <MetricCard label="当前 AI 分" :value="report ? scoreText(report.totalScore) : '--'" />
+              <MetricCard label="分项合计" :value="dimensionScores.length ? dimensionTotal.toFixed(2) : '--'" />
+            </div>
+          </div>
+
+          <el-card shadow="never" class="report-panel data-panel">
+            <template #header>
+              <div class="panel-toolbar review-toolbar">
+                <div class="panel-toolbar-main review-assignment-picker">
+                  <strong>复核作业</strong>
+                  <el-select
+                    v-model="selectedAssignment"
+                    size="small"
+                    filterable
+                    class="review-assignment-select"
+                    placeholder="选择作业"
+                  >
+                    <el-option
+                      v-for="assignment in assignments"
+                      :key="assignment.id"
+                      :label="assignment.title"
+                      :value="assignment.id"
+                    />
+                  </el-select>
+                </div>
+                <div class="panel-toolbar-actions review-history-actions">
+                  <el-button @click="loadReportHistory">AI 报告历史</el-button>
+                  <el-button @click="openReportCompare">模型评分对比</el-button>
+                  <el-button @click="loadReviewHistory">复核历史</el-button>
+                </div>
+              </div>
+            </template>
+
+            <div class="review-workspace">
+              <aside class="review-submission-list">
+                <div class="review-list-head">
+                  <div>
+                    <strong>AI 已评分作业</strong>
+                    <span>选择一名学生进入复核</span>
+                  </div>
+                  <el-tag type="info" effect="plain">{{ reviewSubmissionRows.length }} 份</el-tag>
+                </div>
+                <div class="table-shell review-list-table-shell">
+                  <el-table
+                    :data="reviewSubmissionRows"
+                    height="620"
+                    highlight-current-row
+                    empty-text="当前作业还没有 AI 评分报告"
+                    :row-class-name="reviewRowClassName"
+                    @row-click="openReviewSubmission"
+                  >
+                    <el-table-column prop="studentUsername" label="学号" min-width="100" show-overflow-tooltip />
+                    <el-table-column prop="studentRealName" label="姓名" min-width="90" show-overflow-tooltip />
+                    <el-table-column label="AI 分" width="76">
+                      <template #default="{ row }"><strong class="score-cell">{{ scoreText(row.currentScore) }}</strong></template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="88">
+                      <template #default="{ row }">
+                        <el-tag :type="submissionStatusType(row.status)" size="small">{{ submissionStatusText(row.status) }}</el-tag>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </aside>
+
+              <div v-if="report" class="review-detail">
+                <aside class="review-meta-panel sticky-review-panel">
+                  <div class="review-current-student">
+                    <div>
+                      <span class="module-kicker">CURRENT STUDENT</span>
+                      <strong>{{ selectedSubmissionRow?.studentRealName || "已选学生" }}</strong>
+                    </div>
+                    <el-tag
+                      :type="selectedSubmissionRow?.publishStatus === 1 ? 'success' : 'warning'"
+                      effect="light"
+                    >
+                      {{ publishStatusText(selectedSubmissionRow?.publishStatus) }}
+                    </el-tag>
+                  </div>
+                  <p class="review-student-id">{{ selectedSubmissionRow?.studentUsername || "" }}</p>
+                  <div class="review-score-summary">
+                    <MetricCard label="AI 总分" :value="report.totalScore" />
+                    <MetricCard label="当前最终分" :value="finalScore || '--'" />
+                  </div>
+                  <el-form label-position="top" class="review-final-form">
+                    <el-form-item label="最终分">
+                      <el-input v-model="finalScore" />
+                    </el-form-item>
+                    <el-form-item label="教师评语">
+                      <el-input v-model="reviewComment" type="textarea" :rows="6" placeholder="填写面向学生的复核意见" />
+                    </el-form-item>
+                  </el-form>
+                  <div class="review-primary-actions">
+                    <el-button @click="saveReview">保存复核</el-button>
+                    <el-button type="primary" @click="publishGrades">{{ publishButtonText }}</el-button>
+                  </div>
+                  <div class="review-destructive-action destructive-zone">
+                    <span>已发布成绩需要修正时，可先撤回再编辑。</span>
+                    <el-button type="danger" plain @click="retractGrades()">撤回成绩</el-button>
+                  </div>
+                </aside>
+
+                <div class="review-content-stack">
+                  <section class="review-document-panel review-content-panel">
+                    <div class="section-heading">
+                      <div>
+                        <span class="module-kicker">REPORT</span>
+                        <h3>AI 评分报告</h3>
+                      </div>
+                      <span>左侧编辑 Markdown，右侧实时预览</span>
+                    </div>
+                    <div class="markdown-editor-grid">
+                      <section class="report-editor-pane">
+                        <div class="pane-label">报告源内容</div>
+                        <el-input v-model="reportMarkdown" type="textarea" :rows="18" class="markdown-editor" />
+                      </section>
+                      <section class="report-preview-pane">
+                        <div class="pane-label">学生端预览</div>
+                        <article class="markdown-preview rendered-markdown" v-html="reportHtml"></article>
+                      </section>
+                    </div>
+                  </section>
+
+                  <section class="review-score-panel review-content-panel">
+                    <div class="section-heading">
+                      <div>
+                        <span class="module-kicker">RUBRIC</span>
+                        <h3>分项得分与评语</h3>
+                      </div>
+                      <strong>合计 {{ dimensionTotal.toFixed(2) }} 分</strong>
+                    </div>
+                    <div class="table-shell score-table-shell">
+                      <el-table :data="dimensionScores" class="dimension-table" size="small" border empty-text="报告中没有分项得分">
+                        <el-table-column prop="name" label="评分维度" min-width="140" />
+                        <el-table-column label="得分" width="130">
+                          <template #default="{ row }">
+                            <el-input-number
+                              v-model="row.score"
+                              :min="0"
+                              :max="Number(row.max_score || row.maxScore || 100)"
+                              :precision="2"
+                              controls-position="right"
+                              size="small"
+                            />
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="满分" width="76">
+                          <template #default="{ row }">{{ row.max_score ?? row.maxScore ?? 100 }}</template>
+                        </el-table-column>
+                        <el-table-column prop="comment" label="评语" min-width="360">
+                          <template #default="{ row }">
+                            <el-input v-model="row.comment" type="textarea" :rows="2" size="small" />
+                          </template>
+                        </el-table-column>
+                      </el-table>
+                    </div>
+                    <section v-if="issueRows.length" class="issue-block">
+                      <div class="section-heading compact-section-heading">
+                        <h3>代码问题列表</h3>
+                        <span>{{ issueRows.length }} 项</span>
+                      </div>
+                      <div class="table-shell">
+                        <el-table :data="issueRows" class="issue-table" size="small" border>
+                          <el-table-column label="级别" width="82">
+                            <template #default="{ row }">
+                              <el-tag :type="severityType(row.severity)" size="small">{{ row.severity }}</el-tag>
+                            </template>
+                          </el-table-column>
+                          <el-table-column prop="file" label="文件" min-width="160" show-overflow-tooltip />
+                          <el-table-column prop="line" label="行" width="68" />
+                          <el-table-column prop="description" label="说明" min-width="220" show-overflow-tooltip />
+                        </el-table>
+                      </div>
+                    </section>
+                  </section>
+                </div>
+              </div>
+              <el-empty v-else class="empty-panel review-empty-panel" description="点击左侧学生作业查看 AI 评分报告" />
+            </div>
+          </el-card>
         </section>
       </div>
 
     <el-dialog
       v-model="semesterFileCleanupVisible"
+      class="teacher-workflow-dialog destructive-dialog"
       :title="`清理归档学期文件${semesterFileCleanupTarget?.name ? `：${semesterFileCleanupTarget.name}` : ''}`"
       width="min(880px, 94vw)"
       :close-on-click-modal="!semesterFileCleanupExecuting"
@@ -568,28 +832,29 @@
             :closable="false"
             show-icon
           />
-          <el-table
-            v-if="semesterFileCleanupPreview.candidateFiles?.length"
-            :data="semesterFileCleanupPreview.candidateFiles"
-            size="small"
-            border
-            max-height="280"
-          >
-            <el-table-column prop="fileName" label="文件名" min-width="240" show-overflow-tooltip />
-            <el-table-column label="类型" width="110">
-              <template #default="{ row }">{{ semesterCleanupFileType(row.fileType) }}</template>
-            </el-table-column>
-            <el-table-column label="大小" width="100">
-              <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="130">
-              <template #default="{ row }">
-                <el-tag :type="row.deletable ? 'danger' : row.exists ? 'warning' : 'info'" size="small">
-                  {{ row.deletable ? "将删除" : row.skipReason || "已跳过" }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
+          <div v-if="semesterFileCleanupPreview.candidateFiles?.length" class="table-shell dialog-table-shell">
+            <el-table
+              :data="semesterFileCleanupPreview.candidateFiles"
+              size="small"
+              border
+              max-height="280"
+            >
+              <el-table-column prop="fileName" label="文件名" min-width="240" show-overflow-tooltip />
+              <el-table-column label="类型" width="110">
+                <template #default="{ row }">{{ semesterCleanupFileType(row.fileType) }}</template>
+              </el-table-column>
+              <el-table-column label="大小" width="100">
+                <template #default="{ row }">{{ formatBytes(row.fileSize) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="130">
+                <template #default="{ row }">
+                  <el-tag :type="row.deletable ? 'danger' : row.exists ? 'warning' : 'info'" size="small">
+                    {{ row.deletable ? "将删除" : row.skipReason || "已跳过" }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
           <p v-if="semesterFileCleanupPreview.detailsTruncated" class="cleanup-detail-note">
             文件较多，明细仅展示前 200 条，统计和清理范围包含全部文件。
           </p>
@@ -635,29 +900,36 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="scoringPreviewVisible" title="确认评分列表" width="720px">
-      <el-table :data="scoringSelection" height="300">
-        <el-table-column prop="studentUsername" label="学号" width="120" />
-        <el-table-column prop="studentRealName" label="姓名" width="110" />
-        <el-table-column prop="fileName" label="文件名" min-width="170" />
-        <el-table-column prop="uploadTime" label="提交时间" min-width="170" />
-      </el-table>
+    <el-dialog v-model="scoringPreviewVisible" class="teacher-workflow-dialog scoring-confirm-dialog" title="确认评分列表" width="720px">
+      <div class="dialog-intro">
+        <strong>即将发起 {{ scoringSelection.length }} 份 AI 评分任务</strong>
+        <span>请确认学生和提交文件无误，任务发起后可在 AI 任务页面查看进度。</span>
+      </div>
+      <div class="table-shell dialog-table-shell">
+        <el-table :data="scoringSelection" height="300" empty-text="尚未选择待评分提交">
+          <el-table-column prop="studentUsername" label="学号" width="120" />
+          <el-table-column prop="studentRealName" label="姓名" width="110" />
+          <el-table-column prop="fileName" label="文件名" min-width="170" />
+          <el-table-column prop="uploadTime" label="提交时间" min-width="170" />
+        </el-table>
+      </div>
       <template #footer>
         <el-button @click="scoringPreviewVisible = false">取消</el-button>
         <el-button type="primary" :loading="scoringSubmitting" @click="confirmScoring">发起 AI 评分</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="rubricPreviewVisible" title="Rubric JSON 预览" width="760px">
+    <el-dialog v-model="rubricPreviewVisible" class="teacher-workflow-dialog rubric-dialog" title="Rubric JSON 预览" width="760px">
       <pre class="rubric-preview">{{ rubricPreviewJson }}</pre>
     </el-dialog>
 
-    <el-dialog v-model="manualScoringVisible" title="手动评分" width="1080px">
+    <el-dialog v-model="manualScoringVisible" class="teacher-workflow-dialog manual-scoring-dialog" title="手动评分" width="1080px">
       <div class="review-current-student manual-scoring-student">
         <strong>{{ selectedSubmissionRow?.studentRealName || "已选学生" }}</strong>
         <span>{{ selectedSubmissionRow?.studentUsername || "" }}</span>
       </div>
-      <el-table :data="manualScoreRows" class="dimension-table" size="small" border max-height="360">
+      <div class="table-shell dialog-table-shell">
+      <el-table :data="manualScoreRows" class="dimension-table" size="small" border max-height="360" empty-text="当前 Rubric 没有评分项">
         <el-table-column prop="name" label="评分点" min-width="180" />
         <el-table-column label="得分" width="130">
           <template #default="{ row }">
@@ -680,12 +952,14 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
       <section class="issue-block manual-issue-block">
         <div class="card-head">
           <h3>问题列表</h3>
           <el-button size="small" @click="addManualIssue">添加问题</el-button>
         </div>
-        <el-table :data="manualIssueRows" class="issue-table" size="small" border max-height="220">
+        <div class="table-shell dialog-table-shell">
+        <el-table :data="manualIssueRows" class="issue-table" size="small" border max-height="220" empty-text="暂无问题记录，可按需添加">
           <el-table-column label="级别" width="120">
             <template #default="{ row }">
               <el-select v-model="row.severity" size="small">
@@ -716,6 +990,7 @@
             </template>
           </el-table-column>
         </el-table>
+        </div>
       </section>
       <template #footer>
         <span class="manual-score-total">合计 {{ manualScoreTotal.toFixed(2) }} / 100</span>
@@ -724,8 +999,13 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="reportHistoryVisible" title="AI 报告历史" width="820px">
-      <el-table :data="reportHistory" size="small" border>
+    <el-dialog v-model="reportHistoryVisible" class="teacher-workflow-dialog history-dialog" title="AI 报告历史" width="820px">
+      <div class="dialog-intro">
+        <strong>历次模型评分记录</strong>
+        <span>选择一份历史报告可载入当前复核工作区。</span>
+      </div>
+      <div class="table-shell dialog-table-shell">
+      <el-table :data="reportHistory" size="small" border empty-text="当前提交没有历史 AI 报告">
         <el-table-column prop="id" label="报告" width="72" />
         <el-table-column prop="taskId" label="任务" width="72" />
         <el-table-column prop="modelName" label="模型" min-width="150" />
@@ -738,9 +1018,10 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-dialog>
 
-    <el-dialog v-model="reportCompareVisible" title="不同模型评分对比" width="1180px">
+    <el-dialog v-model="reportCompareVisible" class="teacher-workflow-dialog report-compare-dialog" title="不同模型评分对比" width="1180px">
       <div v-if="reportHistory.length >= 2" class="compare-panel">
         <div class="compare-selectors">
           <el-select v-model="compareLeftId" placeholder="选择左侧报告">
@@ -765,7 +1046,8 @@
           <MetricCard label="分差" :value="scoreDeltaText(compareLeftReport, compareRightReport)" />
           <MetricCard :label="compareRightReport?.modelName || '右侧模型'" :value="scoreText(compareRightReport?.totalScore)" />
         </div>
-        <el-table :data="compareDimensionRows" size="small" border class="compare-table">
+        <div class="table-shell dialog-table-shell">
+        <el-table :data="compareDimensionRows" size="small" border class="compare-table" empty-text="两份报告没有可对比的评分维度">
           <el-table-column prop="name" label="评分维度" min-width="150" />
           <el-table-column label="左侧得分" width="110">
             <template #default="{ row }">{{ scoreText(row.leftScore) }}</template>
@@ -779,6 +1061,7 @@
           <el-table-column prop="leftComment" label="左侧评语" min-width="180" show-overflow-tooltip />
           <el-table-column prop="rightComment" label="右侧评语" min-width="180" show-overflow-tooltip />
         </el-table>
+        </div>
         <div class="compare-columns">
           <section>
             <h3>左侧问题</h3>
@@ -805,8 +1088,13 @@
       <el-empty v-else description="同一提交至少需要两份 AI 报告才能对比" />
     </el-dialog>
 
-    <el-dialog v-model="reviewHistoryVisible" title="复核修改历史" width="820px">
-      <el-table :data="reviewHistory" size="small" border>
+    <el-dialog v-model="reviewHistoryVisible" class="teacher-workflow-dialog history-dialog" title="复核修改历史" width="820px">
+      <div class="dialog-intro">
+        <strong>教师复核版本</strong>
+        <span>载入历史版本后可查看当时的最终分与教师评语。</span>
+      </div>
+      <div class="table-shell dialog-table-shell">
+      <el-table :data="reviewHistory" size="small" border empty-text="当前提交还没有复核历史">
         <el-table-column prop="id" label="复核" width="72" />
         <el-table-column prop="aiReportId" label="AI报告" width="90" />
         <el-table-column prop="finalScore" label="最终分" width="90" />
@@ -818,6 +1106,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-dialog>
   </section>
 </template>
@@ -827,6 +1116,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { ElMessage, ElMessageBox } from "element-plus";
 import { messageOf } from "../JS/api.js";
 import { renderMarkdown } from "../JS/markdown.js";
+import "../CSS/teacher-workflow-pages.css";
 import MetricCard from "./MetricCard.vue";
 import AssignmentPanel from "./teacher/AssignmentPanel.vue";
 import RubricTemplatePanel from "./teacher/RubricTemplatePanel.vue";
@@ -839,7 +1129,9 @@ const props = defineProps({
 const emit = defineEmits(["switch-module"]);
 
 const assignments = ref([]);
+const assignmentsLoading = ref(false);
 const submissions = ref([]);
+const submissionsLoading = ref(false);
 const tasks = ref([]);
 const taskLogs = ref([]);
 const taskProgress = ref(null);
@@ -850,6 +1142,15 @@ const studentSelection = ref([]);
 const rubricTemplates = ref([]);
 const rubricTemplateItems = ref([]);
 const activeTeacherModule = computed(() => props.activeModule || "assignments");
+const activeTeacherModuleLabel = computed(() => ({
+  assignments: "作业管理",
+  students: "学生管理",
+  templates: "评分模板",
+  submissions: "提交评分",
+  tasks: "AI 任务",
+  downloads: "文件下载",
+  review: "复核发布"
+})[activeTeacherModule.value] || "教师工作台");
 const studentUploadProgress = ref(0);
 const cleanupOlderThanDays = ref(180);
 const cleanupPreview = ref(null);
@@ -914,6 +1215,10 @@ const semesterCleanupErrorSummary = computed(() => {
   return errors.length > 3 ? `${summary}；另有 ${errors.length - 3} 项失败` : summary;
 });
 let scoringPollTimer = null;
+let scoringPollGeneration = 0;
+let assignmentRequestId = 0;
+let assignmentStatsRequestId = 0;
+let submissionRequestId = 0;
 let cleanupPreviewRequestId = 0;
 let semesterFileCleanupRequestId = 0;
 let syncingSubmissionSelection = false;
@@ -1034,6 +1339,24 @@ const reviewSubmissionRows = computed(() =>
 const selectedSubmissionRow = computed(() =>
   submissions.value.find((item) => item.id === selectedSubmission.value) || null
 );
+const submissionOverview = computed(() => {
+  const rows = submissions.value;
+  return {
+    total: rows.length,
+    scored: rows.filter((item) => ["scored", "reviewed", "published"].includes(item.status)).length,
+    running: rows.filter((item) => item.status === "scoring").length,
+    pending: rows.filter((item) => ["uploaded", "parsed", "parse_failed", "failed"].includes(item.status)).length
+  };
+});
+const submissionEmptyText = computed(() => {
+  if (assignmentsLoading.value) return "正在加载作业";
+  if (!assignments.value.length) return "当前学期暂无作业";
+  if (!selectedAssignment.value) return "请先选择评分作业";
+  if (submissionQuery.studentNo.trim() || submissionQuery.status) {
+    return "当前作业没有符合筛选条件的提交记录";
+  }
+  return "当前作业暂无提交记录";
+});
 const selectedRubricTemplate = computed(() =>
   rubricTemplates.value.find((item) => item.id === assignmentForm.rubricTemplateId) || null
 );
@@ -1064,57 +1387,110 @@ onMounted(async () => {
 
 onUnmounted(() => stopScoringPolling());
 
-watch(selectedAssignment, () => {
+watch(selectedAssignment, (nextAssignment, previousAssignment) => {
+  stopScoringPolling();
+  submissionRequestId++;
   selectedSubmission.value = null;
   scoringSelection.value = [];
   downloadSelection.value = [];
+  submissions.value = [];
+  tasks.value = [];
+  taskProgress.value = null;
   report.value = null;
   reportMarkdown.value = "";
+  rubric.value = null;
+  if (!sameEntityId(nextAssignment, previousAssignment)) {
+    submissionQuery.studentNo = "";
+    submissionQuery.status = "";
+  }
+  if (!nextAssignment) {
+    submissionsLoading.value = false;
+    return;
+  }
   refreshSubmissions();
   refreshActiveRubric();
 });
 
+watch(activeTeacherModule, (nextModule) => {
+  if (nextModule === "assignments" && editingAssignmentId.value) {
+    refreshEditingAssignmentStats(editingAssignmentId.value);
+  }
+});
+
 async function refreshAssignments() {
+  const requestId = ++assignmentRequestId;
+  const semesterId = selectedSemesterId.value;
+  assignmentsLoading.value = true;
   try {
-    const query = selectedSemesterId.value ? `?semesterId=${selectedSemesterId.value}` : "";
-    assignments.value = await props.api.get(`/api/v1/assignments${query}`);
-    if (!selectedAssignment.value && assignments.value[0]) {
-      selectedAssignment.value = assignments.value[0].id;
+    const query = semesterId ? `?semesterId=${semesterId}` : "";
+    const nextAssignments = await props.api.get(`/api/v1/assignments${query}`);
+    if (requestId !== assignmentRequestId || !sameEntityId(selectedSemesterId.value, semesterId)) return;
+    assignments.value = Array.isArray(nextAssignments) ? nextAssignments : [];
+    const currentAssignmentExists = assignments.value.some((item) => sameEntityId(item.id, selectedAssignment.value));
+    const nextAssignmentId = currentAssignmentExists
+      ? selectedAssignment.value
+      : assignments.value[0]?.id ?? null;
+    if (!sameEntityId(nextAssignmentId, selectedAssignment.value)) {
+      selectedAssignment.value = nextAssignmentId;
+    } else if (nextAssignmentId) {
+      refreshSubmissions();
+      refreshActiveRubric();
+    }
+    if (editingAssignmentId.value && assignments.value.some((item) => sameEntityId(item.id, editingAssignmentId.value))) {
+      refreshEditingAssignmentStats(editingAssignmentId.value);
     }
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (requestId === assignmentRequestId) {
+      ElMessage.error(messageOf(error));
+    }
+  } finally {
+    if (requestId === assignmentRequestId) {
+      assignmentsLoading.value = false;
+    }
   }
 }
 
 async function refreshSubmissions() {
-  if (!selectedAssignment.value) {
-    assignmentStats.value = null;
+  const assignmentId = selectedAssignment.value;
+  const requestId = ++submissionRequestId;
+  if (!assignmentId) {
+    submissions.value = [];
+    tasks.value = [];
+    taskProgress.value = null;
+    submissionsLoading.value = false;
     return;
   }
+  submissionsLoading.value = true;
   try {
-    const [nextSubmissions, nextTasks, nextStats, nextProgress] = await Promise.all([
-      props.api.get(submissionListUrl()),
-      props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
-      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
-      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
+    const [nextSubmissions, nextTasks, nextProgress] = await Promise.all([
+      props.api.get(submissionListUrl(assignmentId)),
+      props.api.get(`/api/v1/ai-tasks?assignment_id=${assignmentId}`),
+      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${assignmentId}`)
     ]);
+    if (requestId !== submissionRequestId || !sameEntityId(selectedAssignment.value, assignmentId)) return;
     await replaceSubmissionRows(nextSubmissions);
+    if (requestId !== submissionRequestId || !sameEntityId(selectedAssignment.value, assignmentId)) return;
     await syncSubmissionTableSelections();
     tasks.value = nextTasks;
-    assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
     if (!selectedSubmission.value && nextSubmissions[0]) {
       selectedSubmission.value = nextSubmissions[0].id;
     }
-    watchRunningTasks(nextTasks);
+    watchRunningTasks(nextTasks, assignmentId);
   } catch (error) {
-    ElMessage.error(messageOf(error));
+    if (requestId === submissionRequestId && sameEntityId(selectedAssignment.value, assignmentId)) {
+      ElMessage.error(messageOf(error));
+    }
+  } finally {
+    if (requestId === submissionRequestId) {
+      submissionsLoading.value = false;
+    }
   }
 }
 
-function submissionListUrl() {
+function submissionListUrl(assignmentId = selectedAssignment.value) {
   const params = new URLSearchParams();
-  params.set("assignment_id", selectedAssignment.value);
+  params.set("assignment_id", assignmentId);
   if (submissionQuery.studentNo.trim()) {
     params.set("student_no", submissionQuery.studentNo.trim());
   }
@@ -1124,7 +1500,34 @@ function submissionListUrl() {
   return `/api/v1/submissions?${params.toString()}`;
 }
 
-function watchRunningTasks(nextTasks) {
+function sameEntityId(left, right) {
+  if (left === null || left === undefined || right === null || right === undefined) {
+    return left == null && right == null;
+  }
+  return String(left) === String(right);
+}
+
+async function refreshEditingAssignmentStats(assignmentId = editingAssignmentId.value) {
+  const requestId = ++assignmentStatsRequestId;
+  if (!assignmentId) {
+    assignmentStats.value = null;
+    return;
+  }
+  try {
+    const nextStats = await props.api.get(`/api/v1/assignments/${assignmentId}/stats`);
+    if (requestId === assignmentStatsRequestId && sameEntityId(editingAssignmentId.value, assignmentId)) {
+      assignmentStats.value = nextStats;
+    }
+  } catch (error) {
+    if (requestId === assignmentStatsRequestId && sameEntityId(editingAssignmentId.value, assignmentId)) {
+      assignmentStats.value = null;
+      ElMessage.error(messageOf(error));
+    }
+  }
+}
+
+function watchRunningTasks(nextTasks, assignmentId = selectedAssignment.value) {
+  if (!sameEntityId(selectedAssignment.value, assignmentId)) return;
   const activeIds = nextTasks
     .filter((task) => ["pending", "running"].includes(task.status))
     .map((task) => task.id)
@@ -1190,6 +1593,7 @@ function changeSemester() {
   semesterFileCleanupVisible.value = false;
   resetSemesterFileCleanup();
   selectedAssignment.value = null;
+  resetAssignmentForm();
   refreshAssignments();
   refreshStudents();
 }
@@ -1354,6 +1758,7 @@ async function createAssignment(published) {
     assignments.value = [created, ...assignments.value];
     selectedAssignment.value = created.id;
     editingAssignmentId.value = created.id;
+    refreshEditingAssignmentStats(created.id);
     ElMessage.success(published
       ? `作业已发布至：${assignmentClassNames(created).join("、")}`
       : "草稿已创建");
@@ -1364,9 +1769,11 @@ async function createAssignment(published) {
 
 function selectAssignment(row) {
   selectedAssignment.value = row?.id || null;
+  assignmentStatsRequestId++;
   assignmentStats.value = null;
   if (row) {
     editingAssignmentId.value = row.id;
+    refreshEditingAssignmentStats(row.id);
     assignmentForm.title = row.title || "";
     assignmentForm.courseName = row.courseName || "";
     assignmentForm.description = row.description || "";
@@ -1459,8 +1866,9 @@ async function deleteAssignment(row) {
 }
 
 function resetAssignmentForm() {
+  assignmentStatsRequestId++;
   editingAssignmentId.value = null;
-  selectedAssignment.value = null;
+  assignmentStats.value = null;
   assignmentForm.title = "";
   assignmentForm.courseName = "";
   assignmentForm.description = "";
@@ -2054,13 +2462,13 @@ function startScoringPolling() {
   if (!scoringWatchIds.value.length) return;
   stopScoringPolling(false);
   scoringPolling.value = true;
-  scoringPollTimer = window.setInterval(checkScoringProgress, 3000);
-  checkScoringProgress();
+  checkScoringProgress(scoringPollGeneration);
 }
 
 function stopScoringPolling(resetWatch = true) {
+  scoringPollGeneration++;
   if (scoringPollTimer) {
-    window.clearInterval(scoringPollTimer);
+    window.clearTimeout(scoringPollTimer);
     scoringPollTimer = null;
   }
   scoringPolling.value = false;
@@ -2069,30 +2477,70 @@ function stopScoringPolling(resetWatch = true) {
   }
 }
 
-async function checkScoringProgress() {
-  if (!selectedAssignment.value || !scoringWatchIds.value.length) {
+function scheduleNextScoringPoll(generation) {
+  if (!scoringPolling.value || generation !== scoringPollGeneration) return;
+  if (scoringPollTimer) {
+    window.clearTimeout(scoringPollTimer);
+  }
+  scoringPollTimer = window.setTimeout(() => {
+    scoringPollTimer = null;
+    checkScoringProgress(generation);
+  }, 3000);
+}
+
+async function checkScoringProgress(generation = scoringPollGeneration) {
+  const assignmentId = selectedAssignment.value;
+  const watchedIds = [...scoringWatchIds.value];
+  const submissionVersion = submissionRequestId;
+  if (generation !== scoringPollGeneration) return;
+  if (!assignmentId || !watchedIds.length) {
     stopScoringPolling();
     return;
   }
+  if (submissionsLoading.value) {
+    scheduleNextScoringPoll(generation);
+    return;
+  }
   try {
-    const [nextTasks, nextSubmissions, nextStats, nextProgress] = await Promise.all([
-      props.api.get(`/api/v1/ai-tasks?assignment_id=${selectedAssignment.value}`),
-      props.api.get(submissionListUrl()),
-      props.api.get(`/api/v1/assignments/${selectedAssignment.value}/stats`),
-      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${selectedAssignment.value}`)
+    const [nextTasks, nextSubmissions, nextProgress] = await Promise.all([
+      props.api.get(`/api/v1/ai-tasks?assignment_id=${assignmentId}`),
+      props.api.get(submissionListUrl(assignmentId)),
+      props.api.get(`/api/v1/ai-tasks/progress?assignment_id=${assignmentId}`)
     ]);
+    const watchListUnchanged = watchedIds.length === scoringWatchIds.value.length
+      && watchedIds.every((id) => scoringWatchIds.value.includes(id));
+    if (
+      generation !== scoringPollGeneration
+      || !scoringPolling.value
+      || !sameEntityId(selectedAssignment.value, assignmentId)
+      || !watchListUnchanged
+    ) return;
+    if (submissionVersion !== submissionRequestId || submissionsLoading.value) {
+      scheduleNextScoringPoll(generation);
+      return;
+    }
     tasks.value = nextTasks;
     await replaceSubmissionRows(nextSubmissions);
+    if (
+      generation !== scoringPollGeneration
+      || !scoringPolling.value
+      || !sameEntityId(selectedAssignment.value, assignmentId)
+    ) return;
     await syncSubmissionTableSelections();
-    assignmentStats.value = nextStats;
     taskProgress.value = nextProgress;
     refreshTokenQuota();
     refreshTokenStats();
-    const watched = nextTasks.filter((task) => scoringWatchIds.value.includes(task.id));
-    if (!watched.length) return;
+    const watched = nextTasks.filter((task) => watchedIds.includes(task.id));
+    if (!watched.length) {
+      scheduleNextScoringPoll(generation);
+      return;
+    }
     const done = watched.filter((task) => ["success", "failed", "cancelled"].includes(task.status));
-    if (done.length === scoringWatchIds.value.length) {
+    if (done.length === watchedIds.length) {
       stopScoringPolling();
+      if (sameEntityId(editingAssignmentId.value, assignmentId)) {
+        refreshEditingAssignmentStats(assignmentId);
+      }
       const failed = done.filter((task) => task.status === "failed").length;
       const cancelled = done.filter((task) => task.status === "cancelled").length;
       if (cancelled) {
@@ -2102,10 +2550,14 @@ async function checkScoringProgress() {
       } else {
         ElMessage.success("AI 评分已全部完成");
       }
+      return;
     }
+    scheduleNextScoringPoll(generation);
   } catch (error) {
-    stopScoringPolling(false);
-    ElMessage.error(messageOf(error));
+    if (generation === scoringPollGeneration && sameEntityId(selectedAssignment.value, assignmentId)) {
+      stopScoringPolling(false);
+      ElMessage.error(messageOf(error));
+    }
   }
 }
 

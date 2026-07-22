@@ -6,5 +6,7 @@ import "./CSS/base.css";
 import "./CSS/auth.css";
 import "./CSS/teacher.css";
 import "./CSS/student.css";
+import "./CSS/design-system.css";
+import "./CSS/teacher-management-pages.css";
 
 createApp(App).use(ElementPlus).mount("#root");
