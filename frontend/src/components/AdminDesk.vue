@@ -145,6 +145,9 @@
               </el-form-item>
               <el-form-item :label="accountForm.id ? '新密码（留空不修改）' : '初始密码'" class="admin-password-field">
                 <el-input v-model="accountForm.initialPassword" type="password" show-password autocomplete="new-password" />
+                <span class="admin-field-help">
+                  {{ accountForm.id ? "填写后将使旧密码立即失效" : "默认 Teacher123456，首次登录后建议修改" }}
+                </span>
               </el-form-item>
             </div>
           </section>
@@ -228,11 +231,20 @@
             />
           </div>
           <div class="account-import-actions">
-            <el-button @click="downloadTemplate">下载导入模板</el-button>
+            <el-button
+              type="primary"
+              plain
+              :icon="Download"
+              :loading="templateDownloading"
+              @click="downloadTemplate"
+            >
+              下载教师导入模板
+            </el-button>
             <el-upload :show-file-list="false" :auto-upload="false" :on-change="importAccounts" accept=".xlsx">
               <el-button type="success">Excel 导入</el-button>
             </el-upload>
           </div>
+          <span class="account-import-help">请先下载模板；教职工号和姓名必填，空白密码使用左侧默认密码。</span>
         </div>
       </div>
 
@@ -275,8 +287,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import { computed, h, nextTick, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Download } from "@element-plus/icons-vue";
 import { messageOf } from "../JS/api.js";
 import MetricCard from "./MetricCard.vue";
 
@@ -291,6 +304,7 @@ const accounts = ref([]);
 const accountSearch = ref("");
 const importPassword = ref("Teacher123456");
 const importProgress = ref(0);
+const templateDownloading = ref(false);
 const configSaving = ref(false);
 const accountSaving = ref(false);
 const accountForm = reactive(emptyAccount());
@@ -416,15 +430,33 @@ async function loadAccounts() {
 async function saveAccount() {
   accountSaving.value = true;
   try {
+    const editing = Boolean(accountForm.id);
+    const initialPassword = accountForm.initialPassword || "Teacher123456";
     const payload = { ...accountForm, employeeNo: accountForm.username };
+    let savedAccount;
     if (accountForm.id) {
-      await props.api.put(`/api/v1/admin/accounts/${accountForm.id}`, payload);
+      savedAccount = await props.api.put(`/api/v1/admin/accounts/${accountForm.id}`, payload);
     } else {
-      await props.api.post("/api/v1/admin/accounts", payload);
+      savedAccount = await props.api.post("/api/v1/admin/accounts", payload);
     }
     await loadAccounts();
     resetForm();
-    ElMessage.success("账号已保存");
+    if (editing) {
+      ElMessage.success("账号已保存；如填写了新密码，旧密码已失效");
+    } else {
+      const accountRoleLabel = payload.role === "admin" ? "管理员" : "教师";
+      const credentialMessage = h("div", { class: "account-credential-message" }, [
+        h("p", `账号已创建，请将以下登录信息交给${accountRoleLabel}：`),
+        h("p", [h("strong", "登录账号："), savedAccount?.username || payload.username.trim()]),
+        h("p", [h("strong", "初始密码："), initialPassword]),
+        h("small", "首次登录后建议立即修改密码。")
+      ]);
+      ElMessageBox.alert(credentialMessage, `${accountRoleLabel}账号创建成功`, {
+        confirmButtonText: "我已记录",
+        closeOnClickModal: false,
+        closeOnPressEscape: false
+      }).catch(() => {});
+    }
   } catch (error) {
     ElMessage.error(messageOf(error));
   } finally {
@@ -467,8 +499,16 @@ async function resetPassword(row) {
   }
 }
 
-function downloadTemplate() {
-  props.api.downloadGet("/api/v1/admin/accounts/import-template", "教师管理员导入模板.xlsx");
+async function downloadTemplate() {
+  templateDownloading.value = true;
+  try {
+    await props.api.downloadGet("/api/v1/admin/accounts/import-template", "教师账号导入模板.xlsx");
+    ElMessage.success("教师导入模板已下载");
+  } catch (error) {
+    ElMessage.error(messageOf(error));
+  } finally {
+    templateDownloading.value = false;
+  }
 }
 
 async function importAccounts(uploadFile) {
@@ -484,7 +524,14 @@ async function importAccounts(uploadFile) {
       }
     });
     await loadAccounts();
-    ElMessage.success(`导入完成：新增 ${result.imported || 0} 个账号`);
+    const skipped = result.skipped?.length || 0;
+    const failed = result.failed?.length || 0;
+    const summary = `导入完成：新增 ${result.imported || 0}，跳过 ${skipped}，失败 ${failed}`;
+    if (failed > 0) {
+      ElMessage.warning(summary);
+    } else {
+      ElMessage.success(summary);
+    }
   } catch (error) {
     ElMessage.error(messageOf(error));
   } finally {

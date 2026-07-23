@@ -426,6 +426,7 @@ async def score_with_deepseek(request: ScoreRequest) -> dict[str, Any]:
         timeout=DEEPSEEK_TIMEOUT_SECONDS,
     )
     result.setdefault("model_name", AI_MODEL)
+    result["model_source"] = "deepseek"
     return result
 
 # 异步函数，用于使用本地模型进行评分
@@ -438,6 +439,7 @@ async def score_with_local_model(request: ScoreRequest) -> dict[str, Any]:
         timeout=LOCAL_MODEL_TIMEOUT_SECONDS,
     )
     result.setdefault("model_name", LOCAL_AI_MODEL)
+    result["model_source"] = "local"
     return result
 
 # 异步函数，用于使用 OpenAI 兼容的接口进行评分
@@ -732,6 +734,7 @@ def fallback_score(request: ScoreRequest) -> dict[str, Any]:
     )
     result = {
         "model_name": "fallback-local",
+        "model_source": "fallback",
         "total_score": float(total),
         "dimension_scores": scores,
         "issues": issues,

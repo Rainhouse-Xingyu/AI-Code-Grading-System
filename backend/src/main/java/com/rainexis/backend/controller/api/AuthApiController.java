@@ -37,15 +37,16 @@ public class AuthApiController {
     /** 用户注册（默认角色为 teacher） */
     @PostMapping("/register")
     public ApiResponse<Map<String, Object>> register(@RequestBody RegisterRequest request) {
-        if (request.username() == null || request.password() == null) {
+        String username = request == null ? null : normalizeUsername(request.username());
+        if (username == null || request.password() == null) {
             throw BusinessException.badRequest("用户名和密码不能为空");
         }
         passwordService.requireStrong(request.password());
-        if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, request.username())) > 0) {
+        if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username)) > 0) {
             throw BusinessException.conflict("用户名已存在");
         }
         TUser user = new TUser();
-        user.setUsername(request.username());
+        user.setUsername(username);
         user.setPassword(passwordService.encode(request.password()));
         user.setRole("teacher");
         user.setRealName(request.realName());
@@ -64,14 +65,19 @@ public class AuthApiController {
     /** 用户登录：校验密码 → 检查锁定 → 返回JWT Token */
     @PostMapping("/login")
     public ApiResponse<Map<String, Object>> login(@RequestBody LoginRequest request) {
-        TUser user = userMapper.selectOne(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, request.username()).last("limit 1"));
+        String username = request == null ? null : normalizeUsername(request.username());
+        String password = request == null ? null : request.password();
+        if (username == null || password == null) {
+            throw BusinessException.unauthorized("用户名或密码错误");
+        }
+        TUser user = userMapper.selectOne(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username).last("limit 1"));
         if (user == null) {
             throw BusinessException.unauthorized("用户名或密码错误");
         }
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(LocalDateTime.now())) {
             throw new BusinessException(423, "账户已锁定，请 15 分钟后再试");
         }
-        if (!passwordMatches(request.password(), user.getPassword())) {
+        if (!passwordMatches(password, user.getPassword())) {
             recordLoginFailure(user);
             throw BusinessException.unauthorized("用户名或密码错误");
         }
@@ -96,6 +102,14 @@ public class AuthApiController {
             return false;
         }
         return passwordService.matches(raw, stored);
+    }
+
+    private String normalizeUsername(String username) {
+        if (username == null) {
+            return null;
+        }
+        String normalized = username.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private void recordLoginFailure(TUser user) {

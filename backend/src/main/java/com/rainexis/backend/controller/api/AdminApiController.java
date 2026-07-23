@@ -17,7 +17,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.http.ContentDisposition;
@@ -82,15 +85,12 @@ public class AdminApiController {
     @PostMapping("/accounts")
     public ApiResponse<Map<String, Object>> createAccount(@RequestBody AccountRequest request) {
         AuthContext.requireAdmin();
-        validateAccountRequest(request, true);
+        validateAccountRequest(request);
         String username = clean(request.username());
         if (userMapper.selectCount(new LambdaQueryWrapper<TUser>().eq(TUser::getUsername, username)) > 0) {
             throw BusinessException.conflict("账号已存在");
         }
-        String password = clean(request.initialPassword());
-        if (password == null) {
-            password = DEFAULT_TEACHER_PASSWORD;
-        }
+        String password = accountPassword(request.initialPassword(), true);
         passwordService.requireStrong(password);
         TUser user = new TUser();
         user.setUsername(username);
@@ -108,7 +108,7 @@ public class AdminApiController {
     @PutMapping("/accounts/{id}")
     public ApiResponse<Map<String, Object>> updateAccount(@PathVariable Long id, @RequestBody AccountRequest request) {
         AuthContext.requireAdmin();
-        validateAccountRequest(request, false);
+        validateAccountRequest(request);
         TUser user = userMapper.selectById(id);
         if (user == null) {
             throw BusinessException.notFound("账号不存在");
@@ -122,6 +122,15 @@ public class AdminApiController {
             user.setUsername(nextUsername);
         }
         applyAccountFields(user, request);
+        String nextPassword = accountPassword(request.initialPassword(), false);
+        if (nextPassword != null) {
+            passwordService.requireStrong(nextPassword);
+            user.setPassword(passwordService.encode(nextPassword));
+            user.setNeedPasswordChange(true);
+            user.setLoginFailCount(0);
+            user.setLockedUntil(null);
+            user.setTokenVersion((user.getTokenVersion() == null ? 0 : user.getTokenVersion()) + 1);
+        }
         user.setUpdatedAt(LocalDateTime.now());
         userMapper.updateById(user);
         return ApiResponse.ok(accountPayload(user));
@@ -220,15 +229,21 @@ public class AdminApiController {
     public ResponseEntity<byte[]> importTemplate() {
         AuthContext.requireAdmin();
         try (var workbook = new XSSFWorkbook(); var out = new ByteArrayOutputStream()) {
-            var sheet = workbook.createSheet("teachers");
+            var sheet = workbook.createSheet("教师账号导入");
+            var headerStyle = workbook.createCellStyle();
+            var headerFont = workbook.createFont();
+            headerFont.setBold(true);
+            headerFont.setColor(IndexedColors.WHITE.getIndex());
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             var header = sheet.createRow(0);
-            header.createCell(0).setCellValue("教职工号");
-            header.createCell(1).setCellValue("姓名");
-            header.createCell(2).setCellValue("学院");
-            header.createCell(3).setCellValue("教授课程");
-            header.createCell(4).setCellValue("教授班级");
-            header.createCell(5).setCellValue("是否管理员");
-            header.createCell(6).setCellValue("初始密码");
+            String[] headers = {"教职工号", "姓名", "学院", "教授课程", "教授班级", "是否管理员", "初始密码"};
+            for (int i = 0; i < headers.length; i++) {
+                var cell = header.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
             var example = sheet.createRow(1);
             example.createCell(0).setCellValue("t2024001");
             example.createCell(1).setCellValue("王老师");
@@ -237,14 +252,31 @@ public class AdminApiController {
             example.createCell(4).setCellValue("软件工程2401");
             example.createCell(5).setCellValue("否");
             example.createCell(6).setCellValue(DEFAULT_TEACHER_PASSWORD);
-            for (int i = 0; i <= 6; i++) {
-                sheet.autoSizeColumn(i);
+            int[] columnWidths = {18, 14, 20, 24, 24, 16, 22};
+            for (int i = 0; i < columnWidths.length; i++) {
+                sheet.setColumnWidth(i, columnWidths[i] * 256);
             }
+            sheet.createFreezePane(0, 1);
+            sheet.setAutoFilter(new CellRangeAddress(0, 0, 0, headers.length - 1));
+
+            var instructions = workbook.createSheet("填写说明");
+            String[] instructionLines = {
+                    "教师账号导入说明",
+                    "1. 教职工号、姓名为必填项；教职工号同时作为登录账号。",
+                    "2. 是否管理员填写“是”时创建管理员账号，填写“否”或留空时创建教师账号。",
+                    "3. 初始密码可留空，留空时使用导入页面设置的默认密码。",
+                    "4. 密码至少 8 位，且必须同时包含字母和数字。",
+                    "5. 请保留第一行表头，并使用 .xlsx 格式上传。"
+            };
+            for (int i = 0; i < instructionLines.length; i++) {
+                instructions.createRow(i).createCell(0).setCellValue(instructionLines[i]);
+            }
+            instructions.setColumnWidth(0, 78 * 256);
             workbook.write(out);
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                     .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
-                            .filename("教师管理员导入模板.xlsx", StandardCharsets.UTF_8)
+                            .filename("教师账号导入模板.xlsx", StandardCharsets.UTF_8)
                             .build()
                             .toString())
                     .body(out.toByteArray());
@@ -253,7 +285,7 @@ public class AdminApiController {
         }
     }
 
-    private void validateAccountRequest(AccountRequest request, boolean requirePassword) {
+    private void validateAccountRequest(AccountRequest request) {
         if (request == null || clean(request.username()) == null) {
             throw BusinessException.badRequest("账号/教职工号不能为空");
         }
@@ -264,9 +296,16 @@ public class AdminApiController {
         if (!List.of("teacher", "admin").contains(role)) {
             throw BusinessException.badRequest("角色仅支持 teacher/admin");
         }
-        if (requirePassword && clean(request.initialPassword()) != null) {
-            passwordService.requireStrong(request.initialPassword());
+    }
+
+    private String accountPassword(String rawPassword, boolean useDefaultWhenMissing) {
+        if (rawPassword == null || rawPassword.isEmpty()) {
+            return useDefaultWhenMissing ? DEFAULT_TEACHER_PASSWORD : null;
         }
+        if (!rawPassword.equals(rawPassword.trim())) {
+            throw BusinessException.badRequest("密码首尾不能包含空格");
+        }
+        return rawPassword;
     }
 
     private void applyAccountFields(TUser user, AccountRequest request) {

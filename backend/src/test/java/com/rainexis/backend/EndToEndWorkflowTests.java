@@ -46,6 +46,7 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
@@ -61,6 +62,7 @@ import org.springframework.web.context.WebApplicationContext;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItems;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -70,6 +72,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -770,6 +773,90 @@ class EndToEndWorkflowTests {
     }
 
     @Test
+    void adminCreatedTeacherCanLoginUpdatePasswordAndDownloadTemplate() throws Exception {
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        String adminToken = registerAdmin("admin_account_" + suffix);
+        String username = "teacher_account_" + suffix;
+
+        String createJson = mockMvc.perform(post("/api/v1/admin/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "username":"  %s  ",
+                                  "realName":"教师账号回归测试",
+                                  "role":"teacher",
+                                  "college":"软件学院",
+                                  "teachingCourse":"Java 程序设计",
+                                  "teachingClass":"软件工程2401",
+                                  "initialPassword":"Teacher123456"
+                                }
+                                """.formatted(username))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.username").value(username))
+                .andExpect(jsonPath("$.data.role").value("teacher"))
+                .andExpect(jsonPath("$.data.needPasswordChange").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        long teacherId = objectMapper.readTree(createJson).path("data").path("id").asLong();
+
+        JsonNode initialLogin = postJson("/api/v1/auth/login", null, """
+                {"username":"  %s  ","password":"Teacher123456"}
+                """.formatted(username));
+        assertThat(initialLogin.path("data").path("user").path("role").asText()).isEqualTo("teacher");
+        assertThat(initialLogin.path("data").path("user").path("needPasswordChange").asBoolean()).isTrue();
+
+        mockMvc.perform(put("/api/v1/admin/accounts/{id}", teacherId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "username":"%s",
+                                  "realName":"教师账号回归测试",
+                                  "role":"teacher",
+                                  "college":"软件学院",
+                                  "teachingCourse":"Java 程序设计",
+                                  "teachingClass":"软件工程2401",
+                                  "initialPassword":"Updated123456"
+                                }
+                                """.formatted(username))
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-CSRF-Token", csrf(adminToken)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"%s","password":"Teacher123456"}
+                                """.formatted(username)))
+                .andExpect(status().isUnauthorized());
+        JsonNode updatedLogin = postJson("/api/v1/auth/login", null, """
+                {"username":"%s","password":"Updated123456"}
+                """.formatted(username));
+        assertThat(updatedLogin.path("data").path("user").path("username").asText()).isEqualTo(username);
+
+        var templateResult = mockMvc.perform(get("/api/v1/admin/accounts/import-template")
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", containsString("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")))
+                .andExpect(header().string("Content-Disposition", containsString("attachment")))
+                .andReturn();
+
+        try (Workbook workbook = WorkbookFactory.create(
+                new ByteArrayInputStream(templateResult.getResponse().getContentAsByteArray()))) {
+            assertThat(workbook.getSheet("教师账号导入")).isNotNull();
+            assertThat(workbook.getSheet("填写说明")).isNotNull();
+            var headerRow = workbook.getSheet("教师账号导入").getRow(0);
+            assertThat(headerRow.getCell(0).getStringCellValue()).isEqualTo("教职工号");
+            assertThat(headerRow.getCell(1).getStringCellValue()).isEqualTo("姓名");
+            assertThat(headerRow.getCell(6).getStringCellValue()).isEqualTo("初始密码");
+            assertThat(workbook.getSheet("教师账号导入").getRow(1).getCell(6).getStringCellValue())
+                    .isEqualTo("Teacher123456");
+        }
+    }
+
+    @Test
     void migrationDeletesSuperadminAccountAndConvertsLegacyRole() {
         TUser deletedAccount = new TUser();
         deletedAccount.setUsername("superadmin");
@@ -1018,6 +1105,64 @@ class EndToEndWorkflowTests {
     }
 
     @Test
+    void localDeepSeekCallbackPersistsLocalSourceAndDoesNotConsumeDeepSeekQuota() throws Exception {
+        String teacherToken = registerTeacher("t_local_ds", "CS-LOCAL-DS");
+        Long assignmentId = createPublishedAssignment(teacherToken, "Local DeepSeek", "java");
+        importStudent(teacherToken, "s_local_ds", "Local Student", "CS-LOCAL-DS");
+        String studentToken = login("s_local_ds", "123456");
+        Long submissionId = submitZip(studentToken, assignmentId);
+        long deepSeekTokensBefore = getJson("/api/v1/ai-reports/token-quota", teacherToken)
+                .path("data").path("usedTokens").asLong();
+        JsonNode rubricDimension = objectMapper.readTree(
+                assignmentMapper.selectById(assignmentId).getNormalizedRubricJson())
+                .path("dimensions").get(0);
+        String dimensionName = rubricDimension.path("name").asText();
+        BigDecimal dimensionMaxScore = rubricDimension.path("max_score").decimalValue();
+
+        TAiTask task = new TAiTask();
+        task.setAssignmentId(assignmentId);
+        task.setSubmissionId(submissionId);
+        task.setModelName("deepseek-r1:14b");
+        task.setStatus("running");
+        task.setStartTime(LocalDateTime.now());
+        taskMapper.insert(task);
+
+        String result = objectMapper.writeValueAsString(Map.of(
+                "model_name", "deepseek-r1:14b",
+                "model_source", "local",
+                "total_score", 88,
+                "dimension_scores", List.of(Map.of(
+                        "name", dimensionName,
+                        "score", 88,
+                        "max_score", dimensionMaxScore,
+                        "comment", "本地模型评分"
+                )),
+                "issues", List.of(),
+                "file_analysis", List.of(),
+                "report_markdown", "# 本地模型评分报告",
+                "token_usage", 777
+        ));
+
+        mockMvc.perform(post("/internal/ai-callback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"taskId":%d,"submissionId":%d,"status":"success","result":%s}
+                                """.formatted(task.getId(), submissionId, result)))
+                .andExpect(status().isOk());
+
+        TAiReport report = reportMapper.selectOne(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getSubmissionId, submissionId)
+                .last("limit 1"));
+        assertThat(report.getModelName()).isEqualTo("local/deepseek-r1:14b");
+        assertThat(report.getTokenUsage()).isEqualTo(777);
+
+        mockMvc.perform(get("/api/v1/ai-reports/token-quota")
+                        .header("Authorization", bearer(teacherToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.usedTokens").value(deepSeekTokensBefore));
+    }
+
+    @Test
     void deepSeekTokenQuotaCountsOnlyDeepSeekReports() throws Exception {
         String teacherToken = registerTeacher("t018", "CS-18");
         Long assignmentId = createPublishedAssignment(teacherToken, "Token Quota", "java");
@@ -1026,6 +1171,7 @@ class EndToEndWorkflowTests {
         Long submissionId = submitZip(studentToken, assignmentId);
 
         insertAiReport(submissionId, "Pro/deepseek-ai/DeepSeek-R1", 1234);
+        insertAiReport(submissionId, "local/deepseek-r1:14b", 4321);
         insertAiReport(submissionId, "fallback-local", 9999);
 
         mockMvc.perform(get("/api/v1/ai-reports/token-quota")
@@ -1041,12 +1187,12 @@ class EndToEndWorkflowTests {
         mockMvc.perform(get("/api/v1/ai-reports/token-stats")
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.totalTokens").value(11233))
-                .andExpect(jsonPath("$.data.reportCount").value(2))
-                .andExpect(jsonPath("$.data.byModel[*].tokenUsage").value(containsInAnyOrder(1234, 9999)))
+                .andExpect(jsonPath("$.data.totalTokens").value(15554))
+                .andExpect(jsonPath("$.data.reportCount").value(3))
+                .andExpect(jsonPath("$.data.byModel[*].tokenUsage").value(containsInAnyOrder(1234, 4321, 9999)))
                 .andExpect(jsonPath("$.data.byAssignment[0].assignmentId").value(assignmentId))
-                .andExpect(jsonPath("$.data.byAssignment[0].tokenUsage").value(11233))
-                .andExpect(jsonPath("$.data.byProvider[*].provider").value(containsInAnyOrder("DeepSeek", "规则兜底")));
+                .andExpect(jsonPath("$.data.byAssignment[0].tokenUsage").value(15554))
+                .andExpect(jsonPath("$.data.byProvider[*].provider").value(containsInAnyOrder("DeepSeek", "本地模型", "规则兜底")));
     }
 
     @Test

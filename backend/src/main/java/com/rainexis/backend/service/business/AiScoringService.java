@@ -27,6 +27,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -485,7 +486,7 @@ public class AiScoringService {
                 try {
                     Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
                             structureJson, rubricJson, previousReportMarkdown);
-                    local.putIfAbsent("model_name", activeLocalModel);
+                    markLocalModel(local, activeLocalModel);
                     validateResult(local, rubricJson);
                     return local;
                 } catch (Exception localEx) {
@@ -504,6 +505,7 @@ public class AiScoringService {
                 try {
                     Map<String, Object> remote = callDeepSeek(structureJson, rubricJson, previousReportMarkdown);
                     remote.put("model_name", activeModel);
+                    remote.put("model_source", "deepseek");
                     validateResult(remote, rubricJson);
                     return remote;
                 } catch (Exception ex) {
@@ -514,7 +516,7 @@ public class AiScoringService {
                 try {
                     Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
                             structureJson, rubricJson, previousReportMarkdown);
-                    local.putIfAbsent("model_name", activeLocalModel);
+                    markLocalModel(local, activeLocalModel);
                     local.put("fallback_reason", last == null ? "remote failed" : last.getMessage());
                     validateResult(local, rubricJson);
                     return local;
@@ -679,6 +681,7 @@ public class AiScoringService {
                 + "- 建议教师结合运行结果进行人工复核。\n";
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("model_name", "fallback-local");
+        result.put("model_source", "fallback");
         result.put("total_score", total);
         result.put("dimension_scores", scores);
         result.put("issues", issues);
@@ -968,7 +971,7 @@ public class AiScoringService {
         TAiReport report = new TAiReport();
         report.setSubmissionId(task.getSubmissionId());
         report.setTaskId(task.getId());
-        report.setModelName(result.getOrDefault("model_name", "unknown").toString());
+        report.setModelName(persistedModelName(result));
         report.setTotalScore(decimal(result.get("total_score")));
         report.setScoreJson(objectMapper.writeValueAsString(result.get("dimension_scores")));
         report.setScoreDetailJson(objectMapper.writeValueAsString(result.get("dimension_scores")));
@@ -981,6 +984,24 @@ public class AiScoringService {
                 .eq(TAiReport::getSubmissionId, task.getSubmissionId())
                 .ne(TAiReport::getId, report.getId()));
         return report;
+    }
+
+    /**
+     * 模型名本身不能代表调用来源：本机 Ollama 也可能运行 deepseek-r1。
+     * 在结果中保留明确来源，并在持久化名称上加 local/ 前缀，供历史统计可靠区分。
+     */
+    private void markLocalModel(Map<String, Object> result, String configuredModel) {
+        result.putIfAbsent("model_name", configuredModel);
+        result.put("model_source", "local");
+    }
+
+    private String persistedModelName(Map<String, Object> result) {
+        String modelName = result.getOrDefault("model_name", "unknown").toString();
+        String source = result.getOrDefault("model_source", "").toString();
+        if ("local".equalsIgnoreCase(source) && !modelName.toLowerCase(Locale.ROOT).startsWith("local/")) {
+            return "local/" + modelName;
+        }
+        return modelName;
     }
 
     /** 将评分任务推入 Redis 队列，等待异步回调处理 */

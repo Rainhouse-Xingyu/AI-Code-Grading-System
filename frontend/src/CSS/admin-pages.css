@@ -414,6 +414,7 @@
 
 .account-import-zone {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 10px;
 }
@@ -431,6 +432,31 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.admin-field-help,
+.account-import-help {
+  color: var(--cg-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.admin-field-help {
+  display: block;
+  margin-top: 6px;
+}
+
+.account-import-help {
+  flex-basis: 100%;
+  text-align: right;
+}
+
+.account-credential-message p {
+  margin: 0 0 10px;
+}
+
+.account-credential-message small {
+  color: var(--cg-muted);
 }
 
 .admin-row-actions {
@@ -599,6 +625,10 @@
   .account-import-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .account-import-help {
+    text-align: left;
   }
 
   .admin-desk .panel-toolbar-actions {

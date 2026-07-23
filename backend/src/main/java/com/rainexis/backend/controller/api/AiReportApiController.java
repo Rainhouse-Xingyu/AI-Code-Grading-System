@@ -43,6 +43,7 @@ public class AiReportApiController {
     private final TAssignmentMapper assignmentMapper;
     private final AccessControlService accessControlService;
     private final long deepSeekTokenQuota;
+    private final String localModel;
     private final RuntimeConfigService runtimeConfigService;
     private final ObjectMapper objectMapper;
 
@@ -51,6 +52,7 @@ public class AiReportApiController {
                                  TAssignmentMapper assignmentMapper,
                                  AccessControlService accessControlService,
                                  @Value("${app.ai.deepseek-token-quota}") long deepSeekTokenQuota,
+                                 @Value("${app.ai.local-model}") String localModel,
                                  RuntimeConfigService runtimeConfigService,
                                  ObjectMapper objectMapper) {
         this.reportMapper = reportMapper;
@@ -58,6 +60,7 @@ public class AiReportApiController {
         this.assignmentMapper = assignmentMapper;
         this.accessControlService = accessControlService;
         this.deepSeekTokenQuota = deepSeekTokenQuota;
+        this.localModel = localModel;
         this.runtimeConfigService = runtimeConfigService;
         this.objectMapper = objectMapper;
     }
@@ -362,7 +365,9 @@ public class AiReportApiController {
 
     private boolean isDeepSeekReport(TAiReport report) {
         String modelName = report.getModelName();
-        return modelName != null && modelName.toLowerCase(Locale.ROOT).contains("deepseek");
+        return modelName != null
+                && !isLocalModelName(modelName)
+                && modelName.toLowerCase(Locale.ROOT).contains("deepseek");
     }
 
     public record ManualReportRequest(BigDecimal totalScore,
@@ -390,6 +395,9 @@ public class AiReportApiController {
 
     private String providerOf(String modelName) {
         String normalized = modelName.toLowerCase(Locale.ROOT);
+        if (isLocalModelName(modelName)) {
+            return "本地模型";
+        }
         if (normalized.contains("deepseek")) {
             return "DeepSeek";
         }
@@ -400,6 +408,18 @@ public class AiReportApiController {
             return "本地模型";
         }
         return "其他模型";
+    }
+
+    private boolean isLocalModelName(String modelName) {
+        String normalized = modelName == null ? "" : modelName.strip().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("local/") || normalized.startsWith("local:")) {
+            return true;
+        }
+        // 兼容修复前已经保存、尚未带 local/ 前缀的本地模型报告。
+        String configuredLocalModel = runtimeConfigService.get("LOCAL_AI_MODEL", localModel);
+        return configuredLocalModel != null
+                && !configuredLocalModel.isBlank()
+                && normalized.equals(configuredLocalModel.strip().toLowerCase(Locale.ROOT));
     }
 
     private void increment(Map<String, Map<String, Object>> target,
