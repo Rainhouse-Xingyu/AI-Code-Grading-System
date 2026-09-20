@@ -262,7 +262,7 @@ public class SubmissionApiController {
         if (latest == null) {
             return;
         }
-        if (List.of("scoring", "scored", "reviewed", "published", "failed").contains(latest.getStatus())) {
+        if (List.of("scoring", "partial_scored", "scored", "reviewed", "published", "failed").contains(latest.getStatus())) {
             throw BusinessException.conflict("作业已进入评分阶段，不能再次提交");
         }
     }

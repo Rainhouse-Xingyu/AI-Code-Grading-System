@@ -28,9 +28,13 @@ import com.rainexis.backend.mapper.TAiTaskMapper;
 import com.rainexis.backend.mapper.TUserMapper;
 import com.rainexis.backend.service.business.ZipStructureService;
 import com.rainexis.backend.service.business.RubricParserService;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -49,6 +53,8 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -84,11 +90,46 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.data.redis.password=",
         "app.storage.root=${java.io.tmpdir}/ai-code-grading-test-uploads",
         "app.upload-dir=${java.io.tmpdir}/ai-code-grading-test-uploads",
+        "app.ai.provider=local",
+        "app.ai.local-base-url=http://127.0.0.1:18089/v1",
+        "app.ai.local-timeout-seconds=2",
         "app.ai.enable-remote=false",
         "app.ai.dispatcher-enabled=false",
         "APP_ENV_FILE=${java.io.tmpdir}/ai-code-grading-test-empty.env"
 })
 class EndToEndWorkflowTests {
+    private static HttpServer aiMockServer;
+
+    @BeforeAll
+    static void startAiMockServer() throws IOException {
+        aiMockServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 18089), 0);
+        aiMockServer.createContext("/v1/chat/completions", EndToEndWorkflowTests::handleAiMockRequest);
+        aiMockServer.start();
+    }
+
+    @AfterAll
+    static void stopAiMockServer() {
+        if (aiMockServer != null) {
+            aiMockServer.stop(0);
+        }
+    }
+
+    private static void handleAiMockRequest(HttpExchange exchange) throws IOException {
+        exchange.getRequestBody().readAllBytes();
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+        String response = """
+                {"choices":[{"message":{"content":"{\\"total_score\\":85,\\"dimension_scores\\":[{\\"name\\":\\"功能完整性\\",\\"score\\":85,\\"max_score\\":100,\\"comment\\":\\"测试模型评分\\"}],\\"issues\\":[],\\"file_analysis\\":[],\\"report_markdown\\":\\"# 模型评分报告\\",\\"suggestion\\":[]}"}}],"usage":{"total_tokens":123}}
+                """;
+        byte[] body = response.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+    }
+
     @Autowired
     private WebApplicationContext webApplicationContext;
 
@@ -274,8 +315,12 @@ class EndToEndWorkflowTests {
                 .andExpect(jsonPath("$.data.length()").value(4));
 
         JsonNode report = getJson("/api/v1/ai-reports/" + submissionId, teacherToken).path("data");
-        assertThat(report.path("totalScore").decimalValue()).isEqualByComparingTo("85.00");
-        assertThat(report.path("reportMarkdown").asText()).contains("评分报告");
+        assertThat(report.path("llmStatus").asText()).isEqualTo("success");
+        assertThat(report.path("keywordStatus").asText()).isEqualTo("success");
+        assertThat(report.path("llmScore").decimalValue()).isEqualByComparingTo("85.00");
+        assertThat(report.path("keywordScore").decimalValue()).isGreaterThan(BigDecimal.ZERO);
+        assertThat(report.path("totalScore").decimalValue()).isEqualByComparingTo(report.path("averageScore").decimalValue());
+        assertThat(report.path("reportMarkdown").asText()).contains("并行评分报告", "大模型评分结果", "关键字匹配评分结果");
         String modifiedScores = objectMapper.writeValueAsString(List.of(
                 Map.of("name", "人工复核", "score", 90.5, "max_score", 100, "comment", "运行通过，适当加分。")
         ));
@@ -372,7 +417,9 @@ class EndToEndWorkflowTests {
                         .header("Authorization", bearer(studentToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.publish.finalScore").value(90.5))
-                .andExpect(jsonPath("$.data.aiReport.totalScore").value(85.0))
+                .andExpect(jsonPath("$.data.aiReport.llmStatus").value("success"))
+                .andExpect(jsonPath("$.data.aiReport.keywordStatus").value("success"))
+                .andExpect(jsonPath("$.data.aiReport.totalScore").exists())
                 .andExpect(jsonPath("$.data.teacherReview.finalScore").value(90.5))
                 .andExpect(jsonPath("$.data.teacherReview.finalComment").value("运行通过，适当加分。"))
                 .andExpect(jsonPath("$.data.teacherReview.modifiedJson").exists())
@@ -469,14 +516,14 @@ class EndToEndWorkflowTests {
         mockMvc.perform(get("/api/v1/ai-tasks/" + taskId + "/logs")
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(8));
+                .andExpect(jsonPath("$.data.length()").value(7));
 
         mockMvc.perform(get("/api/v1/ai-reports/{submissionId}/history", submissionId)
                         .header("Authorization", bearer(teacherToken)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(1))
                 .andExpect(jsonPath("$.data[0].submissionId").value(submissionId))
-                .andExpect(jsonPath("$.data[0].modelName").value("fallback-local"));
+                .andExpect(jsonPath("$.data[0].modelName").value("local/Qwen2.5-Coder-7B-Instruct + keyword-rules"));
 
         mockMvc.perform(post("/api/v1/grade-publish/push-all")
                         .header("Authorization", bearer(teacherToken))
@@ -1153,7 +1200,11 @@ class EndToEndWorkflowTests {
         TAiReport report = reportMapper.selectOne(new LambdaQueryWrapper<TAiReport>()
                 .eq(TAiReport::getSubmissionId, submissionId)
                 .last("limit 1"));
-        assertThat(report.getModelName()).isEqualTo("local/deepseek-r1:14b");
+        assertThat(report.getModelName()).isEqualTo("local/deepseek-r1:14b + keyword-rules");
+        assertThat(report.getLlmStatus()).isEqualTo("success");
+        assertThat(report.getKeywordStatus()).isEqualTo("success");
+        assertThat(report.getLlmScore()).isEqualByComparingTo("88.00");
+        assertThat(report.getAverageScore()).isEqualByComparingTo(report.getTotalScore());
         assertThat(report.getTokenUsage()).isEqualTo(777);
 
         mockMvc.perform(get("/api/v1/ai-reports/token-quota")

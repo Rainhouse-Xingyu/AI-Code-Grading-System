@@ -232,9 +232,7 @@
               </template>
             </el-table-column>
             <template #empty>
-              <el-empty class="empty-panel" description="当前学期还没有作业">
-                <el-button v-if="isAdmin" type="primary" plain @click="$emit('reset-assignment-form')">开始创建作业</el-button>
-              </el-empty>
+              <el-empty class="empty-panel" description="当前学期还没有作业" />
             </template>
           </el-table>
         </div>

@@ -48,10 +48,6 @@
         <el-button plain @click="openProfileSettings">个人设置</el-button>
         <el-button plain @click="signOut">退出登录</el-button>
       </div>
-      <div class="sidebar-footer">
-        <span class="sidebar-status-dot" />
-        <span>服务运行正常</span>
-      </div>
     </aside>
     <section class="main">
       <header class="topbar">

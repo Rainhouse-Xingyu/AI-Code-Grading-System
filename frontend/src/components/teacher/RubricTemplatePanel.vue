@@ -139,9 +139,11 @@
                     <el-input v-model="row.criteria" size="small" placeholder="描述得分标准" />
                   </template>
                 </el-table-column>
-                <el-table-column label="启用" width="70" align="center">
+                <el-table-column label="启用" width="86" align="center">
                   <template #default="{ row }">
-                    <el-switch v-model="row.enabled" size="small" />
+                    <div class="template-item-switch-cell">
+                      <el-switch v-model="row.enabled" size="small" />
+                    </div>
                   </template>
                 </el-table-column>
                 <el-table-column label="操作" width="64" align="right">

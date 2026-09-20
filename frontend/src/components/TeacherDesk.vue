@@ -74,7 +74,6 @@
                   <el-upload :show-file-list="false" :auto-upload="false" :on-change="selectStudentFile" accept=".xls,.xlsx">
                     <el-button type="primary" plain>导入学生 Excel</el-button>
                   </el-upload>
-                  <el-button :disabled="!rubric" @click="rubricPreviewVisible = true">预览 Rubric</el-button>
                 </div>
               </div>
             </template>
@@ -420,6 +419,18 @@
                 <el-table-column label="任务状态" width="104">
                   <template #default="{ row }">
                     <el-tag :type="taskStatusType(row.status)" size="small">{{ taskStatusText(row.status) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="评分方式" min-width="170">
+                  <template #default="{ row }">
+                    <div class="task-method-tags">
+                      <el-tag :type="subScoreStatusType(row.llmStatus)" size="small" effect="plain">
+                        模型 {{ subScoreStatusText(row.llmStatus) }}
+                      </el-tag>
+                      <el-tag :type="subScoreStatusType(row.keywordStatus)" size="small" effect="plain">
+                        关键字 {{ subScoreStatusText(row.keywordStatus) }}
+                      </el-tag>
+                    </div>
                   </template>
                 </el-table-column>
                 <el-table-column label="操作" width="130" fixed="right">
@@ -902,8 +913,8 @@
 
     <el-dialog v-model="scoringPreviewVisible" class="teacher-workflow-dialog scoring-confirm-dialog" title="确认评分列表" width="720px">
       <div class="dialog-intro">
-        <strong>即将发起 {{ scoringSelection.length }} 份 AI 评分任务</strong>
-        <span>请确认学生和提交文件无误，任务发起后可在 AI 任务页面查看进度。</span>
+        <strong>即将发起 {{ scoringSelection.length }} 份并行评分任务</strong>
+        <span>系统会同时生成大模型评分与关键字匹配评分，两种方式都成功后才生成平均分并标记为已评分。</span>
       </div>
       <div class="table-shell dialog-table-shell">
         <el-table :data="scoringSelection" height="300" empty-text="尚未选择待评分提交">
@@ -2640,9 +2651,7 @@ async function loadReport(submissionId = selectedSubmission.value) {
   try {
     report.value = await props.api.get(`/api/v1/ai-reports/${submissionId}`);
     dimensionScores.value = parseDimensionScores(report.value.scoreDetailJson || report.value.scoreJson);
-    finalScore.value = dimensionScores.value.length
-      ? dimensionTotal.value.toFixed(2)
-      : String(report.value.totalScore ?? "");
+    finalScore.value = String(report.value.totalScore ?? "");
     reviewComment.value = "已复核 AI 初评。";
     reportMarkdown.value = report.value.reportMarkdown || "";
     await loadExistingReview();
@@ -2940,6 +2949,7 @@ function submissionStatusText(status) {
   if (status === "published") return "已发布";
   if (status === "reviewed") return "已复核";
   if (status === "scored") return "已评分";
+  if (status === "partial_scored") return "部分评分";
   if (status === "scoring") return "评分中";
   if (status === "parsed") return "已解析";
   if (status === "uploaded") return "已上传";
@@ -2952,6 +2962,7 @@ function submissionStatusType(status) {
   if (status === "published") return "success";
   if (status === "reviewed") return "primary";
   if (status === "scored") return "warning";
+  if (status === "partial_scored") return "warning";
   if (status === "failed") return "danger";
   if (status === "parse_failed") return "danger";
   return "info";
@@ -2964,6 +2975,20 @@ function taskStatusText(status) {
   if (status === "failed") return "失败";
   if (status === "cancelled") return "已结束";
   return status || "未知";
+}
+
+function subScoreStatusText(status) {
+  if (status === "success") return "成功";
+  if (status === "failed") return "失败";
+  if (status === "pending") return "等待";
+  return status || "未开始";
+}
+
+function subScoreStatusType(status) {
+  if (status === "success") return "success";
+  if (status === "failed") return "danger";
+  if (status === "pending") return "warning";
+  return "info";
 }
 
 function taskStudentText(task) {

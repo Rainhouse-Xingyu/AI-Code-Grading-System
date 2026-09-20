@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.rainexis.backend.common.ApiResponse;
 import com.rainexis.backend.common.BusinessException;
 import com.rainexis.backend.entity.TAiLog;
+import com.rainexis.backend.entity.TAiReport;
 import com.rainexis.backend.entity.TAiTask;
 import com.rainexis.backend.entity.TSubmission;
 import com.rainexis.backend.entity.TUser;
 import com.rainexis.backend.mapper.TAiLogMapper;
+import com.rainexis.backend.mapper.TAiReportMapper;
 import com.rainexis.backend.mapper.TAiTaskMapper;
 import com.rainexis.backend.mapper.TSubmissionMapper;
 import com.rainexis.backend.mapper.TUserMapper;
@@ -38,6 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AiTaskApiController {
     private final AiScoringService aiScoringService;
     private final TAiTaskMapper taskMapper;
+    private final TAiReportMapper reportMapper;
     private final TAiLogMapper logMapper;
     private final TSubmissionMapper submissionMapper;
     private final TUserMapper userMapper;
@@ -46,6 +49,7 @@ public class AiTaskApiController {
 
     public AiTaskApiController(AiScoringService aiScoringService,
                                TAiTaskMapper taskMapper,
+                               TAiReportMapper reportMapper,
                                TAiLogMapper logMapper,
                                TSubmissionMapper submissionMapper,
                                TUserMapper userMapper,
@@ -53,6 +57,7 @@ public class AiTaskApiController {
                                AiTaskDispatcherService dispatcherService) {
         this.aiScoringService = aiScoringService;
         this.taskMapper = taskMapper;
+        this.reportMapper = reportMapper;
         this.logMapper = logMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
@@ -183,10 +188,15 @@ public class AiTaskApiController {
         Map<Long, TUser> students = studentIds.isEmpty() ? Map.of() : userMapper.selectBatchIds(studentIds)
                 .stream()
                 .collect(Collectors.toMap(TUser::getId, Function.identity()));
-        return tasks.stream().map(task -> taskPayload(task, submissions.get(task.getSubmissionId()), students)).toList();
+        Map<Long, TAiReport> reports = submissionIds.isEmpty() ? Map.of() : reportMapper.selectList(new LambdaQueryWrapper<TAiReport>()
+                        .in(TAiReport::getSubmissionId, submissionIds)
+                        .orderByDesc(TAiReport::getCreatedAt))
+                .stream()
+                .collect(Collectors.toMap(TAiReport::getSubmissionId, Function.identity(), (first, ignored) -> first));
+        return tasks.stream().map(task -> taskPayload(task, submissions.get(task.getSubmissionId()), students, reports.get(task.getSubmissionId()))).toList();
     }
 
-    private Map<String, Object> taskPayload(TAiTask task, TSubmission submission, Map<Long, TUser> students) {
+    private Map<String, Object> taskPayload(TAiTask task, TSubmission submission, Map<Long, TUser> students, TAiReport report) {
         TUser student = submission == null ? null : students.get(submission.getStudentId());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("id", task.getId());
@@ -207,6 +217,11 @@ public class AiTaskApiController {
         payload.put("studentUsername", student == null ? "" : student.getUsername());
         payload.put("studentRealName", student == null ? "" : student.getRealName());
         payload.put("submissionFileName", submission == null ? "" : submission.getFileName());
+        payload.put("llmStatus", report == null ? "" : report.getLlmStatus());
+        payload.put("keywordStatus", report == null ? "" : report.getKeywordStatus());
+        payload.put("llmScore", report == null ? null : report.getLlmScore());
+        payload.put("keywordScore", report == null ? null : report.getKeywordScore());
+        payload.put("averageScore", report == null ? null : report.getAverageScore());
         return payload;
     }
 

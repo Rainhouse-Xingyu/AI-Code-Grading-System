@@ -1,0 +1,261 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1350" viewBox="0 0 2400 1350">
+  <style>
+    .canvas { fill: #fff; }
+    .title { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 35px; font-weight: 700; fill: #111; }
+    .subtitle { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 18px; fill: #555; }
+    .entity { fill: #fff; stroke: #111; stroke-width: 2.5; }
+    .relation { fill: #fff; stroke: #111; stroke-width: 2.2; }
+    .attribute { fill: #fff; stroke: #111; stroke-width: 1.8; }
+    .link { fill: none; stroke: #333; stroke-width: 1.7; }
+    .entity-text { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 24px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: middle; }
+    .relation-text { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 18px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: middle; }
+    .attr-text { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 17px; font-weight: 600; fill: #111; text-anchor: middle; dominant-baseline: middle; }
+    .card { font-family: "Arial", "PingFang SC", sans-serif; font-size: 20px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: middle; }
+    .note { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 16px; fill: #444; }
+  </style>
+
+  <rect class="canvas" x="0" y="0" width="2400" height="1350"/>
+  <text class="title" x="1200" y="58" text-anchor="middle">AI 代码自动评分系统 · 核心 ER 图</text>
+  <text class="subtitle" x="1200" y="88" text-anchor="middle">Chen 表示法：矩形＝实体，菱形＝关系，椭圆＝属性；主键以“PK”标识</text>
+
+  <!-- 用户 -->
+  <g>
+    <rect class="entity" x="90" y="530" width="180" height="92"/>
+    <text class="entity-text" x="180" y="576">用户</text>
+    <line class="link" x1="135" y1="530" x2="75" y2="430"/>
+    <ellipse class="attribute" cx="55" cy="397" rx="63" ry="27"/><text class="attr-text" x="55" y="397">PK 用户ID</text>
+    <line class="link" x1="180" y1="530" x2="180" y2="430"/>
+    <ellipse class="attribute" cx="180" cy="397" rx="56" ry="27"/><text class="attr-text" x="180" y="397">登录账号</text>
+    <line class="link" x1="240" y1="530" x2="325" y2="430"/>
+    <ellipse class="attribute" cx="355" cy="397" rx="62" ry="27"/><text class="attr-text" x="355" y="397">姓名 / 角色</text>
+    <line class="link" x1="90" y1="596" x2="52" y2="675"/>
+    <ellipse class="attribute" cx="45" cy="711" rx="52" ry="27"/><text class="attr-text" x="45" y="711">班级信息</text>
+    <line class="link" x1="270" y1="596" x2="338" y2="675"/>
+    <ellipse class="attribute" cx="365" cy="711" rx="59" ry="27"/><text class="attr-text" x="365" y="711">联系方式</text>
+  </g>
+
+  <!-- 学期 -->
+  <g>
+    <rect class="entity" x="440" y="145" width="165" height="80"/>
+    <text class="entity-text" x="522" y="185">学期</text>
+    <line class="link" x1="470" y1="145" x2="412" y2="112"/>
+    <ellipse class="attribute" cx="355" cy="93" rx="56" ry="25"/><text class="attr-text" x="355" y="93">PK 学期ID</text>
+    <line class="link" x1="530" y1="145" x2="530" y2="105"/>
+    <ellipse class="attribute" cx="530" cy="80" rx="47" ry="25"/><text class="attr-text" x="530" y="80">学期名称</text>
+    <line class="link" x1="590" y1="145" x2="655" y2="112"/>
+    <ellipse class="attribute" cx="715" cy="93" rx="45" ry="25"/><text class="attr-text" x="715" y="93">状态</text>
+  </g>
+
+  <!-- 作业 -->
+  <g>
+    <rect class="entity" x="635" y="375" width="190" height="92"/>
+    <text class="entity-text" x="730" y="421">作业</text>
+    <line class="link" x1="665" y1="375" x2="600" y2="290"/>
+    <ellipse class="attribute" cx="550" cy="260" rx="58" ry="27"/><text class="attr-text" x="550" y="260">PK 作业ID</text>
+    <line class="link" x1="730" y1="375" x2="730" y2="287"/>
+    <ellipse class="attribute" cx="730" cy="255" rx="58" ry="27"/><text class="attr-text" x="730" y="255">作业标题</text>
+    <line class="link" x1="800" y1="375" x2="885" y2="290"/>
+    <ellipse class="attribute" cx="935" cy="260" rx="58" ry="27"/><text class="attr-text" x="935" y="260">课程名称</text>
+    <line class="link" x1="635" y1="445" x2="558" y2="520"/>
+    <ellipse class="attribute" cx="505" cy="550" rx="55" ry="27"/><text class="attr-text" x="505" y="550">编程语言</text>
+    <line class="link" x1="825" y1="445" x2="905" y2="520"/>
+    <ellipse class="attribute" cx="962" cy="550" rx="60" ry="27"/><text class="attr-text" x="962" y="550">截止时间</text>
+    <line class="link" x1="730" y1="467" x2="730" y2="535"/>
+    <ellipse class="attribute" cx="730" cy="568" rx="60" ry="27"/><text class="attr-text" x="730" y="568">发布状态</text>
+  </g>
+
+  <!-- 评分模板 -->
+  <g>
+    <rect class="entity" x="1020" y="145" width="190" height="80"/>
+    <text class="entity-text" x="1115" y="185">评分模板</text>
+    <line class="link" x1="1045" y1="145" x2="1005" y2="105"/>
+    <ellipse class="attribute" cx="946" cy="82" rx="65" ry="25"/><text class="attr-text" x="946" y="82">PK 模板ID</text>
+    <line class="link" x1="1115" y1="145" x2="1115" y2="105"/>
+    <ellipse class="attribute" cx="1115" cy="80" rx="55" ry="25"/><text class="attr-text" x="1115" y="80">模板名称</text>
+    <line class="link" x1="1190" y1="145" x2="1260" y2="105"/>
+    <ellipse class="attribute" cx="1310" cy="82" rx="43" ry="25"/><text class="attr-text" x="1310" y="82">启用状态</text>
+  </g>
+
+  <!-- 评分量规 -->
+  <g>
+    <rect class="entity" x="1015" y="375" width="190" height="92"/>
+    <text class="entity-text" x="1110" y="421">评分量规</text>
+    <line class="link" x1="1045" y1="375" x2="980" y2="290"/>
+    <ellipse class="attribute" cx="930" cy="260" rx="58" ry="27"/><text class="attr-text" x="930" y="260">PK 量规ID</text>
+    <line class="link" x1="1110" y1="375" x2="1110" y2="287"/>
+    <ellipse class="attribute" cx="1110" cy="255" rx="57" ry="27"/><text class="attr-text" x="1110" y="255">评分规则JSON</text>
+    <line class="link" x1="1180" y1="375" x2="1260" y2="290"/>
+    <ellipse class="attribute" cx="1315" cy="260" rx="50" ry="27"/><text class="attr-text" x="1315" y="260">版本 / 状态</text>
+  </g>
+
+  <!-- 提交 -->
+  <g>
+    <rect class="entity" x="600" y="820" width="190" height="92"/>
+    <text class="entity-text" x="695" y="866">作业提交</text>
+    <line class="link" x1="630" y1="820" x2="565" y2="745"/>
+    <ellipse class="attribute" cx="510" cy="718" rx="63" ry="27"/><text class="attr-text" x="510" y="718">PK 提交ID</text>
+    <line class="link" x1="695" y1="820" x2="695" y2="738"/>
+    <ellipse class="attribute" cx="695" cy="708" rx="59" ry="27"/><text class="attr-text" x="695" y="708">提交版本</text>
+    <line class="link" x1="765" y1="820" x2="845" y2="745"/>
+    <ellipse class="attribute" cx="900" cy="718" rx="58" ry="27"/><text class="attr-text" x="900" y="718">上传时间</text>
+    <line class="link" x1="600" y1="890" x2="520" y2="970"/>
+    <ellipse class="attribute" cx="460" cy="1002" rx="63" ry="27"/><text class="attr-text" x="460" y="1002">代码压缩包</text>
+    <line class="link" x1="790" y1="890" x2="870" y2="970"/>
+    <ellipse class="attribute" cx="930" cy="1002" rx="48" ry="27"/><text class="attr-text" x="930" y="1002">提交状态</text>
+  </g>
+
+  <!-- 项目结构 -->
+  <g>
+    <rect class="entity" x="1055" y="815" width="190" height="92"/>
+    <text class="entity-text" x="1150" y="861">项目结构</text>
+    <line class="link" x1="1085" y1="815" x2="1020" y2="742"/>
+    <ellipse class="attribute" cx="970" cy="715" rx="65" ry="27"/><text class="attr-text" x="970" y="715">PK 结构ID</text>
+    <line class="link" x1="1150" y1="815" x2="1150" y2="738"/>
+    <ellipse class="attribute" cx="1150" cy="708" rx="59" ry="27"/><text class="attr-text" x="1150" y="708">结构化JSON</text>
+    <line class="link" x1="1220" y1="815" x2="1305" y2="742"/>
+    <ellipse class="attribute" cx="1360" cy="715" rx="54" ry="27"/><text class="attr-text" x="1360" y="715">语言 / 文件数</text>
+  </g>
+
+  <!-- AI 评分任务 -->
+  <g>
+    <rect class="entity" x="1420" y="500" width="205" height="92"/>
+    <text class="entity-text" x="1522" y="546">AI 评分任务</text>
+    <line class="link" x1="1450" y1="500" x2="1388" y2="425"/>
+    <ellipse class="attribute" cx="1332" cy="397" rx="63" ry="27"/><text class="attr-text" x="1332" y="397">PK 任务ID</text>
+    <line class="link" x1="1522" y1="500" x2="1522" y2="425"/>
+    <ellipse class="attribute" cx="1522" cy="397" rx="50" ry="27"/><text class="attr-text" x="1522" y="397">模型名称</text>
+    <line class="link" x1="1595" y1="500" x2="1675" y2="425"/>
+    <ellipse class="attribute" cx="1730" cy="397" rx="48" ry="27"/><text class="attr-text" x="1730" y="397">任务状态</text>
+    <line class="link" x1="1420" y1="570" x2="1350" y2="640"/>
+    <ellipse class="attribute" cx="1290" cy="670" rx="52" ry="27"/><text class="attr-text" x="1290" y="670">Token 用量</text>
+    <line class="link" x1="1625" y1="570" x2="1690" y2="640"/>
+    <ellipse class="attribute" cx="1750" cy="670" rx="54" ry="27"/><text class="attr-text" x="1750" y="670">起止时间</text>
+  </g>
+
+  <!-- AI 报告 -->
+  <g>
+    <rect class="entity" x="1445" y="820" width="190" height="92"/>
+    <text class="entity-text" x="1540" y="866">AI 评分报告</text>
+    <line class="link" x1="1475" y1="820" x2="1415" y2="745"/>
+    <ellipse class="attribute" cx="1360" cy="718" rx="63" ry="27"/><text class="attr-text" x="1360" y="718">PK 报告ID</text>
+    <line class="link" x1="1540" y1="820" x2="1540" y2="738"/>
+    <ellipse class="attribute" cx="1540" cy="708" rx="45" ry="27"/><text class="attr-text" x="1540" y="708">总得分</text>
+    <line class="link" x1="1610" y1="820" x2="1695" y2="745"/>
+    <ellipse class="attribute" cx="1755" cy="718" rx="66" ry="27"/><text class="attr-text" x="1755" y="718">评分详情JSON</text>
+    <line class="link" x1="1540" y1="912" x2="1540" y2="978"/>
+    <ellipse class="attribute" cx="1540" cy="1010" rx="74" ry="27"/><text class="attr-text" x="1540" y="1010">Markdown 报告</text>
+  </g>
+
+  <!-- 教师复核 -->
+  <g>
+    <rect class="entity" x="1875" y="610" width="190" height="92"/>
+    <text class="entity-text" x="1970" y="656">教师复核</text>
+    <line class="link" x1="1905" y1="610" x2="1848" y2="535"/>
+    <ellipse class="attribute" cx="1790" cy="508" rx="63" ry="27"/><text class="attr-text" x="1790" y="508">PK 复核ID</text>
+    <line class="link" x1="1970" y1="610" x2="1970" y2="535"/>
+    <ellipse class="attribute" cx="1970" cy="508" rx="49" ry="27"/><text class="attr-text" x="1970" y="508">最终得分</text>
+    <line class="link" x1="2040" y1="610" x2="2120" y2="535"/>
+    <ellipse class="attribute" cx="2180" cy="508" rx="58" ry="27"/><text class="attr-text" x="2180" y="508">复核评语</text>
+  </g>
+
+  <!-- 成绩发布 -->
+  <g>
+    <rect class="entity" x="1880" y="925" width="190" height="92"/>
+    <text class="entity-text" x="1975" y="971">成绩发布</text>
+    <line class="link" x1="1910" y1="925" x2="1855" y2="850"/>
+    <ellipse class="attribute" cx="1798" cy="823" rx="63" ry="27"/><text class="attr-text" x="1798" y="823">PK 发布ID</text>
+    <line class="link" x1="1975" y1="925" x2="1975" y2="850"/>
+    <ellipse class="attribute" cx="1975" cy="823" rx="49" ry="27"/><text class="attr-text" x="1975" y="823">最终成绩</text>
+    <line class="link" x1="2045" y1="925" x2="2125" y2="850"/>
+    <ellipse class="attribute" cx="2185" cy="823" rx="58" ry="27"/><text class="attr-text" x="2185" y="823">发布时间</text>
+  </g>
+
+  <!-- 关系：用户-作业 -->
+  <g>
+    <line class="link" x1="270" y1="555" x2="400" y2="555"/><line class="link" x1="500" y1="555" x2="635" y2="450"/>
+    <polygon class="relation" points="450,510 500,555 450,600 400,555"/><text class="relation-text" x="450" y="555">创建</text>
+    <text class="card" x="290" y="540">1</text><text class="card" x="610" y="470">n</text>
+  </g>
+
+  <!-- 关系：学期-作业 -->
+  <g>
+    <line class="link" x1="605" y1="185" x2="700" y2="185"/><line class="link" x1="790" y1="185" x2="790" y2="375"/>
+    <polygon class="relation" points="745,145 790,185 745,225 700,185"/><text class="relation-text" x="745" y="185">包含</text>
+    <text class="card" x="625" y="168">1</text><text class="card" x="808" y="350">n</text>
+  </g>
+
+  <!-- 关系：模板-量规 -->
+  <g>
+    <line class="link" x1="1115" y1="225" x2="1115" y2="285"/><line class="link" x1="1115" y1="335" x2="1115" y2="375"/>
+    <polygon class="relation" points="1115,285 1155,330 1115,375 1075,330"/><text class="relation-text" x="1115" y="330">生成</text>
+    <text class="card" x="1094" y="242">1</text><text class="card" x="1094" y="360">n</text>
+  </g>
+
+  <!-- 关系：作业-量规 -->
+  <g>
+    <line class="link" x1="825" y1="421" x2="905" y2="421"/><line class="link" x1="965" y1="421" x2="1015" y2="421"/>
+    <polygon class="relation" points="935,390 965,421 935,452 905,421"/><text class="relation-text" x="935" y="421">采用</text>
+    <text class="card" x="844" y="403">1</text><text class="card" x="994" y="403">1</text>
+  </g>
+
+  <!-- 关系：用户-提交 -->
+  <g>
+    <line class="link" x1="270" y1="610" x2="380" y2="740"/><line class="link" x1="480" y1="820" x2="600" y2="850"/>
+    <polygon class="relation" points="405,705 480,740 455,805 380,770"/><text class="relation-text" x="430" y="754">提交</text>
+    <text class="card" x="290" y="630">1</text><text class="card" x="580" y="830">n</text>
+  </g>
+
+  <!-- 关系：作业-提交 -->
+  <g>
+    <line class="link" x1="730" y1="467" x2="730" y2="625"/><line class="link" x1="730" y1="720" x2="695" y2="820"/>
+    <polygon class="relation" points="730,625 775,672 730,720 685,672"/><text class="relation-text" x="730" y="672">产生</text>
+    <text class="card" x="708" y="490">1</text><text class="card" x="710" y="795">n</text>
+  </g>
+
+  <!-- 关系：提交-项目结构 -->
+  <g>
+    <line class="link" x1="790" y1="866" x2="900" y2="866"/><line class="link" x1="1000" y1="866" x2="1055" y2="861"/>
+    <polygon class="relation" points="950,825 1000,866 950,907 900,866"/><text class="relation-text" x="950" y="866">解析</text>
+    <text class="card" x="810" y="846">1</text><text class="card" x="1035" y="846">1</text>
+  </g>
+
+  <!-- 关系：提交-AI任务 -->
+  <g>
+    <line class="link" x1="790" y1="850" x2="965" y2="760"/><line class="link" x1="1055" y1="695" x2="1420" y2="570"/>
+    <polygon class="relation" points="990,715 1055,735 1030,800 965,780"/><text class="relation-text" x="1010" y="754">触发</text>
+    <text class="card" x="812" y="827">1</text><text class="card" x="1395" y="590">n</text>
+  </g>
+
+  <!-- 关系：任务-报告 -->
+  <g>
+    <line class="link" x1="1522" y1="592" x2="1522" y2="665"/><line class="link" x1="1522" y1="765" x2="1540" y2="820"/>
+    <polygon class="relation" points="1522,665 1567,715 1522,765 1477,715"/><text class="relation-text" x="1522" y="715">生成</text>
+    <text class="card" x="1502" y="615">1</text><text class="card" x="1502" y="800">1</text>
+  </g>
+
+  <!-- 关系：报告-教师复核 -->
+  <g>
+    <line class="link" x1="1635" y1="855" x2="1740" y2="780"/><line class="link" x1="1835" y1="710" x2="1875" y2="675"/>
+    <polygon class="relation" points="1765,735 1835,745 1810,815 1740,805"/><text class="relation-text" x="1788" y="777">参考</text>
+    <text class="card" x="1655" y="835">1</text><text class="card" x="1855" y="700">0..n</text>
+  </g>
+
+  <!-- 关系：提交-教师复核 -->
+  <g>
+    <line class="link" x1="790" y1="900" x2="1310" y2="1050"/><line class="link" x1="1385" y1="1050" x2="1920" y2="702"/>
+    <polygon class="relation" points="1310,1000 1385,1050 1310,1100 1235,1050"/><text class="relation-text" x="1310" y="1050">复核</text>
+    <text class="card" x="810" y="920">1</text><text class="card" x="1890" y="720">0..1</text>
+  </g>
+
+  <!-- 关系：提交-成绩发布 -->
+  <g>
+    <line class="link" x1="790" y1="880" x2="1215" y2="1165"/><line class="link" x1="1315" y1="1165" x2="1880" y2="980"/>
+    <polygon class="relation" points="1265,1115 1315,1165 1265,1215 1215,1165"/><text class="relation-text" x="1265" y="1165">发布</text>
+    <text class="card" x="810" y="895">1</text><text class="card" x="1855" y="995">0..1</text>
+  </g>
+
+  <rect x="90" y="1180" width="2200" height="100" fill="#fff" stroke="#111" stroke-width="1.5"/>
+  <text class="note" x="115" y="1215">说明：</text>
+  <text class="note" x="115" y="1245">1. “用户”通过角色字段区分学生、教师与管理员；教师创建作业，学生提交作业。</text>
+  <text class="note" x="115" y="1270">2. 图中呈现评分闭环的核心实体；任务日志、评分模板明细、作业班级、文件管理等辅助表可在物理数据库设计中展开。</text>
+</svg>

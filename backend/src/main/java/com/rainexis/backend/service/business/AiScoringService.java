@@ -53,6 +53,9 @@ import org.springframework.web.reactive.function.client.WebClient;
  */
 @Service
 public class AiScoringService {
+    private static final String SCORING_PENDING = "pending";
+    private static final String SCORING_SUCCESS = "success";
+    private static final String SCORING_FAILED = "failed";
     private static final int PROMPT_FULL_CODE_CHAR_LIMIT = 8000;
     private static final int PROMPT_CORE_CODE_CHAR_LIMIT = 30000;
     private static final int PROMPT_CORE_TARGET_CHARS = 16000;
@@ -152,7 +155,7 @@ public class AiScoringService {
             if (submission == null || !assignmentId.equals(submission.getAssignmentId())) {
                 throw BusinessException.notFound("提交不存在: " + submissionId);
             }
-            if ("scoring".equals(submission.getStatus())) {
+            if ("scoring".equals(submission.getStatus()) || "partial_scored".equals(submission.getStatus())) {
                 throw BusinessException.conflict("提交正在评分中: " + submissionId);
             }
             if ("published".equals(submission.getStatus())) {
@@ -290,38 +293,61 @@ public class AiScoringService {
             if (structure == null) {
                 throw BusinessException.badRequest("提交尚未完成 ZIP 预处理");
             }
+            CombinedScoringState state = restoreCombinedState(task);
+            if (!SCORING_SUCCESS.equals(state.keywordStatus())) {
+                try {
+                    state.keywordResult(keywordScore(structure.getStructureJson(), rubric.getRubricJson()));
+                    state.keywordStatus(SCORING_SUCCESS);
+                    state.keywordError(null);
+                    log(task, "INFO", "关键字匹配评分成功", "keyword-rules", durationMs(task));
+                } catch (Exception keywordEx) {
+                    state.keywordStatus(SCORING_FAILED);
+                    state.keywordError(keywordEx.getMessage());
+                    log(task, "ERROR", "关键字匹配评分失败: " + keywordEx.getMessage(), "keyword-rules", durationMs(task));
+                }
+            }
             if (queueEnabled()) {
+                TAiReport partialReport = saveCombinedReport(task, state);
+                updateSubmissionAfterCombinedScoring(submission, partialReport);
                 if (isCancelled(task)) {
                     return taskMapper.selectById(task.getId());
                 }
                 pushQueue(task, submission, structure, rubric, jointReview ? previousReportMarkdown(submission) : "");
                 return taskMapper.selectById(task.getId());
             }
-            logProgress(task, "构建评分 Prompt 并调用模型");
-            Map<String, Object> result = scoreWithFallback(
-                    structure.getStructureJson(),
-                    rubric.getRubricJson(),
-                    jointReview ? previousReportMarkdown(submission) : ""
-            );
-            logProgress(task, "模型返回结果，开始校验评分结构");
-            validateResult(result, rubric.getRubricJson());
+            if (!SCORING_SUCCESS.equals(state.llmStatus())) {
+                try {
+                    logProgress(task, "构建评分 Prompt 并调用大模型");
+                    Map<String, Object> llmResult = scoreWithModelOnly(
+                            structure.getStructureJson(),
+                            rubric.getRubricJson(),
+                            jointReview ? previousReportMarkdown(submission) : ""
+                    );
+                    logProgress(task, "大模型返回结果，开始校验评分结构");
+                    validateResult(llmResult, rubric.getRubricJson());
+                    state.llmResult(llmResult);
+                    state.llmStatus(SCORING_SUCCESS);
+                    state.llmError(null);
+                } catch (Exception llmEx) {
+                    state.llmStatus(SCORING_FAILED);
+                    state.llmError(llmEx.getMessage());
+                    log(task, "ERROR", "大模型评分失败: " + llmEx.getMessage(), task.getModelName(), durationMs(task));
+                }
+            }
             if (isCancelled(task)) {
                 return taskMapper.selectById(task.getId());
             }
-            logProgress(task, "评分结构校验通过，写入 AI 报告");
-            TAiReport report = saveReport(task, result);
-            logFallbackReason(task, result, report.getModelName());
-            submission.setStatus("scored");
-            submission.setCurrentScore(report.getTotalScore());
-            submission.setCurrentReportId(report.getId());
-            submissionMapper.updateById(submission);
-
-            task.setStatus("success");
+            logProgress(task, "写入并行评分报告");
+            TAiReport report = saveCombinedReport(task, state);
+            updateSubmissionAfterCombinedScoring(submission, report);
+            boolean complete = SCORING_SUCCESS.equals(state.llmStatus()) && SCORING_SUCCESS.equals(state.keywordStatus());
+            task.setStatus(complete ? "success" : "failed");
+            task.setErrorMessage(complete ? null : combinedErrorMessage(state));
             task.setEndTime(LocalDateTime.now());
             task.setModelName(report.getModelName());
             task.setTotalTokens(report.getTokenUsage());
             taskMapper.updateById(task);
-            log(task, "INFO", "AI 评分任务执行成功", report.getModelName(), durationMs(task));
+            log(task, complete ? "INFO" : "WARN", complete ? "并行评分任务执行成功" : "并行评分任务部分完成，等待重试失败评分方式", report.getModelName(), durationMs(task));
             return task;
         } catch (Exception ex) {
             if (isCancelled(task)) {
@@ -361,24 +387,47 @@ public class AiScoringService {
                     throw BusinessException.badRequest("AI 回调缺少评分结果");
                 }
                 TRubric rubric = activeRubric(task.getAssignmentId());
-                validateCallbackDimensionCoverage(result, rubric.getRubricJson());
-                validateResult(result, rubric.getRubricJson());
+                CombinedScoringState state = restoreCombinedState(task);
+                if (isFallbackResult(result)) {
+                    state.llmStatus(SCORING_FAILED);
+                    state.llmError(String.valueOf(result.getOrDefault("fallback_reason", "大模型服务返回兜底结果，不能作为大模型评分成功")));
+                    log(task, "ERROR", "大模型评分失败: " + state.llmError(), task.getModelName(), durationMs(task));
+                } else {
+                    validateCallbackDimensionCoverage(result, rubric.getRubricJson());
+                    validateResult(result, rubric.getRubricJson());
+                    state.llmResult(result);
+                    state.llmStatus(SCORING_SUCCESS);
+                    state.llmError(null);
+                }
+                if (!SCORING_SUCCESS.equals(state.keywordStatus()) && submission != null) {
+                    TProjectStructure structure = structureMapper.selectById(submission.getProjectStructureId());
+                    if (structure != null) {
+                        try {
+                            state.keywordResult(keywordScore(structure.getStructureJson(), rubric.getRubricJson()));
+                            state.keywordStatus(SCORING_SUCCESS);
+                            state.keywordError(null);
+                            log(task, "INFO", "关键字匹配评分成功", "keyword-rules", durationMs(task));
+                        } catch (Exception keywordEx) {
+                            state.keywordStatus(SCORING_FAILED);
+                            state.keywordError(keywordEx.getMessage());
+                            log(task, "ERROR", "关键字匹配评分失败: " + keywordEx.getMessage(), "keyword-rules", durationMs(task));
+                        }
+                    }
+                }
                 if (isCancelled(task)) {
                     return taskMapper.selectById(task.getId());
                 }
-                TAiReport report = saveReport(task, result);
-                logFallbackReason(task, result, report.getModelName());
-                task.setStatus("success");
+                TAiReport report = saveCombinedReport(task, state);
+                boolean complete = SCORING_SUCCESS.equals(state.llmStatus()) && SCORING_SUCCESS.equals(state.keywordStatus());
+                task.setStatus(complete ? "success" : "failed");
+                task.setErrorMessage(complete ? null : combinedErrorMessage(state));
                 task.setModelName(report.getModelName());
                 task.setTotalTokens(report.getTokenUsage());
                 task.setEndTime(LocalDateTime.now());
                 taskMapper.updateById(task);
-                log(task, "INFO", "AI 服务回调成功并写入评分报告", report.getModelName(), durationMs(task));
+                log(task, complete ? "INFO" : "WARN", complete ? "AI 服务回调成功，并行评分报告已完成" : "AI 服务回调后仍只有部分评分成功", report.getModelName(), durationMs(task));
                 if (submission != null) {
-                    submission.setStatus("scored");
-                    submission.setCurrentScore(report.getTotalScore());
-                    submission.setCurrentReportId(report.getId());
-                    submissionMapper.updateById(submission);
+                    updateSubmissionAfterCombinedScoring(submission, report);
                 }
                 return task;
             } catch (Exception ex) {
@@ -389,10 +438,7 @@ public class AiScoringService {
                 task.setErrorMessage(ex.getMessage());
                 task.setEndTime(LocalDateTime.now());
                 taskMapper.updateById(task);
-                if (submission != null) {
-                    submission.setStatus("failed");
-                    submissionMapper.updateById(submission);
-                }
+                markCallbackFailurePartial(task, submission, ex.getMessage());
                 log(task, "ERROR", "AI 回调结果保存失败: " + ex.getMessage(), task.getModelName(), durationMs(task));
                 throw new BusinessException(500, "AI 回调结果保存失败: " + ex.getMessage());
             }
@@ -405,10 +451,7 @@ public class AiScoringService {
         task.setEndTime(LocalDateTime.now());
         taskMapper.updateById(task);
         log(task, "ERROR", "AI 服务回调失败: " + task.getErrorMessage(), task.getModelName(), durationMs(task));
-        if (submission != null) {
-            submission.setStatus("failed");
-            submissionMapper.updateById(submission);
-        }
+        markCallbackFailurePartial(task, submission, task.getErrorMessage());
         return task;
     }
 
@@ -966,6 +1009,382 @@ public class AiScoringService {
         return "";
     }
 
+    private Map<String, Object> scoreWithModelOnly(String structureJson, String rubricJson, String previousReportMarkdown) throws Exception {
+        String activeProvider = aiProvider();
+        String activeLocalBaseUrl = localBaseUrl();
+        String activeLocalApiKey = localApiKey();
+        String activeLocalModel = localModel();
+        String activeDeepSeekApiKey = deepSeekApiKey();
+        if ("local".equalsIgnoreCase(activeProvider)) {
+            if (activeLocalBaseUrl == null || activeLocalBaseUrl.isBlank()) {
+                throw BusinessException.badRequest("LOCAL_AI_BASE_URL 为空，无法执行大模型评分");
+            }
+            Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
+                    structureJson, rubricJson, previousReportMarkdown);
+            markLocalModel(local, activeLocalModel);
+            validateResult(local, rubricJson);
+            return local;
+        }
+        if (!enableRemote()) {
+            throw BusinessException.badRequest("AI_ENABLE_REMOTE=false，远程大模型评分未启用");
+        }
+        if (activeDeepSeekApiKey == null || activeDeepSeekApiKey.isBlank()) {
+            throw BusinessException.badRequest("DEEPSEEK_API_KEY 为空，无法执行大模型评分");
+        }
+        Exception last = null;
+        for (int i = 0; i < 3; i++) {
+            try {
+                Map<String, Object> remote = callDeepSeek(structureJson, rubricJson, previousReportMarkdown);
+                remote.put("model_name", aiModel());
+                remote.put("model_source", "deepseek");
+                validateResult(remote, rubricJson);
+                return remote;
+            } catch (Exception ex) {
+                last = ex;
+            }
+        }
+        if (activeLocalBaseUrl != null && !activeLocalBaseUrl.isBlank()) {
+            Map<String, Object> local = callOpenAiCompatible(activeLocalBaseUrl, activeLocalApiKey, activeLocalModel, localTimeoutSeconds(),
+                    structureJson, rubricJson, previousReportMarkdown);
+            markLocalModel(local, activeLocalModel);
+            validateResult(local, rubricJson);
+            return local;
+        }
+        throw new BusinessException(503, "大模型评分失败: " + (last == null ? "远程模型不可用" : last.getMessage()));
+    }
+
+    private Map<String, Object> keywordScore(String structureJson, String rubricJson) throws Exception {
+        Map<String, Object> rubric = objectMapper.readValue(rubricJson, new TypeReference<>() {
+        });
+        Map<String, Object> structure = objectMapper.readValue(structureJson, new TypeReference<>() {
+        });
+        String codeText = collectCodeText(structure).toLowerCase(Locale.ROOT);
+        List<Map<String, Object>> dimensions = objectMapper.convertValue(
+                rubric.getOrDefault("dimensions", List.of()),
+                new TypeReference<List<Map<String, Object>>>() {
+                });
+        List<Map<String, Object>> scores = new ArrayList<>();
+        List<Map<String, Object>> issues = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map<String, Object> dimension : dimensions) {
+            String name = String.valueOf(dimension.getOrDefault("name", "评分维度"));
+            BigDecimal max = decimal(dimension.getOrDefault("max_score", dimension.getOrDefault("weight", 0)));
+            KeywordMatch match = evaluateKeywordMatch(dimension, codeText);
+            BigDecimal score = max.multiply(BigDecimal.valueOf(match.ratio())).setScale(2, RoundingMode.HALF_UP);
+            total = total.add(score);
+            scores.add(Map.of(
+                    "name", name,
+                    "score", score,
+                    "max_score", max,
+                    "comment", "关键字命中 " + match.hitCount() + "/" + match.totalCount() + "；命中: " + String.join("、", match.hits())
+                            + (match.misses().isEmpty() ? "" : "；缺失: " + String.join("、", match.misses()))
+            ));
+            if (!match.misses().isEmpty()) {
+                issues.add(Map.of(
+                        "severity", score.compareTo(max.multiply(BigDecimal.valueOf(0.6))) < 0 ? "warning" : "suggestion",
+                        "file", "project",
+                        "line", 1,
+                        "description", name + " 关键字匹配缺失: " + String.join("、", match.misses())
+                ));
+            }
+        }
+        if (scores.isEmpty()) {
+            KeywordMatch match = evaluateKeywordMatch(Map.of("name", "综合评分", "criteria", ""), codeText);
+            BigDecimal score = BigDecimal.valueOf(100).multiply(BigDecimal.valueOf(match.ratio())).setScale(2, RoundingMode.HALF_UP);
+            total = score;
+            scores.add(Map.of("name", "综合评分", "score", score, "max_score", BigDecimal.valueOf(100), "comment", "按代码结构和常见编程关键词匹配。"));
+        }
+        if (issues.isEmpty()) {
+            issues.add(Map.of("severity", "suggestion", "file", "project", "line", 1, "description", "关键字匹配未发现明显缺失项，建议教师结合大模型报告复核。"));
+        }
+        String markdown = "## 关键字匹配评分\n\n"
+                + "- 总分: " + total.min(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP) + "/100\n"
+                + "- 评分方式: 根据 Rubric 维度名称、评分描述和常见编程结构关键字在代码中进行确定性匹配。\n\n"
+                + "### 分项命中\n"
+                + scores.stream()
+                .map(item -> "- " + item.get("name") + ": " + item.get("score") + "/" + item.get("max_score") + "，" + item.get("comment"))
+                .reduce("", (left, right) -> left + right + "\n");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("model_name", "keyword-rules");
+        result.put("model_source", "keyword");
+        result.put("total_score", total.min(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP));
+        result.put("dimension_scores", scores);
+        result.put("issues", issues);
+        result.put("file_analysis", List.of());
+        result.put("report_markdown", markdown);
+        result.put("token_usage", 0);
+        validateResult(result, rubricJson);
+        return result;
+    }
+
+    private String collectCodeText(Map<String, Object> structure) {
+        StringBuilder builder = new StringBuilder();
+        Object fileTree = structure.get("file_tree");
+        if (fileTree instanceof List<?> files) {
+            for (Object fileValue : files) {
+                if (fileValue instanceof Map<?, ?> file) {
+                    builder.append(' ').append(file.get("path") == null ? "" : file.get("path"));
+                    builder.append('\n').append(file.get("content") == null ? "" : file.get("content"));
+                }
+            }
+        }
+        builder.append(' ').append(structure.getOrDefault("structure_summary", ""));
+        return builder.toString();
+    }
+
+    private KeywordMatch evaluateKeywordMatch(Map<String, Object> dimension, String codeText) {
+        List<String> keywords = dimensionKeywords(dimension);
+        List<String> hits = new ArrayList<>();
+        List<String> misses = new ArrayList<>();
+        for (String keyword : keywords) {
+            if (matchesKeyword(codeText, keyword)) {
+                hits.add(keyword);
+            } else {
+                misses.add(keyword);
+            }
+        }
+        if (keywords.isEmpty()) {
+            keywords = List.of("class", "def", "function", "main", "return");
+            for (String keyword : keywords) {
+                if (matchesKeyword(codeText, keyword)) {
+                    hits.add(keyword);
+                } else {
+                    misses.add(keyword);
+                }
+            }
+        }
+        double ratio = keywords.isEmpty() ? 0 : (double) hits.size() / (double) keywords.size();
+        return new KeywordMatch(hits, misses, keywords.size(), ratio);
+    }
+
+    private List<String> dimensionKeywords(Map<String, Object> dimension) {
+        String text = String.join(" ",
+                String.valueOf(dimension.getOrDefault("name", "")),
+                String.valueOf(dimension.getOrDefault("criteria", "")),
+                String.valueOf(dimension.getOrDefault("description", "")));
+        Object itemsValue = dimension.get("items");
+        if (itemsValue instanceof List<?> items) {
+            for (Object itemValue : items) {
+                if (itemValue instanceof Map<?, ?> item) {
+                    text += " " + (item.get("name") == null ? "" : item.get("name"))
+                            + " " + (item.get("criteria") == null ? "" : item.get("criteria"));
+                }
+            }
+        }
+        Set<String> keywords = new java.util.LinkedHashSet<>();
+        addConceptKeywords(keywords, text);
+        for (String token : text.toLowerCase(Locale.ROOT).split("[^a-zA-Z0-9_]+")) {
+            if (token.length() >= 3 && !Set.of("and", "the", "for", "with", "this", "that", "score", "criteria").contains(token)) {
+                keywords.add(token);
+            }
+        }
+        return new ArrayList<>(keywords);
+    }
+
+    private void addConceptKeywords(Set<String> keywords, String text) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        Map<String, List<String>> concepts = new LinkedHashMap<>();
+        concepts.put("变量", List.of("int", "string", "double", "float", "boolean", "var", "let", "const"));
+        concepts.put("数据类型", List.of("int", "string", "double", "float", "boolean", "char", "long"));
+        concepts.put("运算符", List.of("+", "-", "*", "/", "%", "==", "!=", ">=", "<=", "&&", "||"));
+        concepts.put("选择", List.of("if", "else", "switch", "case"));
+        concepts.put("条件", List.of("if", "else", "switch", "case"));
+        concepts.put("循环", List.of("for", "while", "do"));
+        concepts.put("数组", List.of("[", "]", "array", "list"));
+        concepts.put("集合", List.of("list", "map", "set", "arraylist", "hashmap"));
+        concepts.put("类", List.of("class"));
+        concepts.put("对象", List.of("new", "class"));
+        concepts.put("方法", List.of("void", "return", "def", "function"));
+        concepts.put("函数", List.of("return", "def", "function"));
+        concepts.put("异常", List.of("try", "catch", "except", "throw"));
+        concepts.put("输入", List.of("scanner", "input", "read", "bufferedreader"));
+        concepts.put("输出", List.of("print", "println", "printf", "console.log"));
+        concepts.put("注释", List.of("//", "/*", "#"));
+        concepts.put("继承", List.of("extends", "implements", "super"));
+        for (Map.Entry<String, List<String>> entry : concepts.entrySet()) {
+            if (text.contains(entry.getKey()) || lower.contains(entry.getKey())) {
+                keywords.addAll(entry.getValue());
+            }
+        }
+    }
+
+    private boolean matchesKeyword(String codeText, String keyword) {
+        String lowerKeyword = keyword.toLowerCase(Locale.ROOT);
+        if (List.of("+", "-", "*", "/", "%", "==", "!=", ">=", "<=", "&&", "||", "[", "]", "//", "/*", "#").contains(lowerKeyword)) {
+            return codeText.contains(lowerKeyword);
+        }
+        return codeText.matches("(?s).*\\b" + java.util.regex.Pattern.quote(lowerKeyword) + "\\b.*")
+                || codeText.contains(lowerKeyword);
+    }
+
+    private CombinedScoringState restoreCombinedState(TAiTask task) throws Exception {
+        CombinedScoringState state = new CombinedScoringState();
+        TAiReport report = latestReport(task);
+        if (report == null) {
+            return state;
+        }
+        state.llmStatus(report.getLlmStatus() == null ? SCORING_PENDING : report.getLlmStatus());
+        state.keywordStatus(report.getKeywordStatus() == null ? SCORING_PENDING : report.getKeywordStatus());
+        if (hasText(report.getLlmResultJson())) {
+            state.llmResult(objectMapper.readValue(report.getLlmResultJson(), new TypeReference<>() {
+            }));
+        }
+        if (hasText(report.getKeywordResultJson())) {
+            state.keywordResult(objectMapper.readValue(report.getKeywordResultJson(), new TypeReference<>() {
+            }));
+        }
+        return state;
+    }
+
+    private TAiReport latestReport(TAiTask task) {
+        TAiReport report = reportMapper.selectOne(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getTaskId, task.getId())
+                .orderByDesc(TAiReport::getCreatedAt)
+                .last("limit 1"));
+        if (report != null) {
+            return report;
+        }
+        return reportMapper.selectOne(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getSubmissionId, task.getSubmissionId())
+                .orderByDesc(TAiReport::getCreatedAt)
+                .last("limit 1"));
+    }
+
+    private TAiReport saveCombinedReport(TAiTask task, CombinedScoringState state) throws Exception {
+        BigDecimal llmScore = resultScore(state.llmResult());
+        BigDecimal keywordScore = resultScore(state.keywordResult());
+        boolean complete = SCORING_SUCCESS.equals(state.llmStatus()) && SCORING_SUCCESS.equals(state.keywordStatus());
+        BigDecimal average = complete
+                ? llmScore.add(keywordScore).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)
+                : null;
+        Map<String, Object> scoreDetails = Map.of(
+                "llm_status", state.llmStatus(),
+                "keyword_status", state.keywordStatus(),
+                "llm_score", llmScore,
+                "keyword_score", keywordScore,
+                "average_score", average == null ? "" : average
+        );
+        TAiReport report = new TAiReport();
+        report.setSubmissionId(task.getSubmissionId());
+        report.setTaskId(task.getId());
+        report.setModelName(combinedModelName(state));
+        report.setTotalScore(average);
+        report.setLlmStatus(state.llmStatus());
+        report.setKeywordStatus(state.keywordStatus());
+        report.setLlmScore(SCORING_SUCCESS.equals(state.llmStatus()) ? llmScore : null);
+        report.setKeywordScore(SCORING_SUCCESS.equals(state.keywordStatus()) ? keywordScore : null);
+        report.setAverageScore(average);
+        report.setLlmResultJson(state.llmResult() == null ? null : objectMapper.writeValueAsString(state.llmResult()));
+        report.setKeywordResultJson(state.keywordResult() == null ? null : objectMapper.writeValueAsString(state.keywordResult()));
+        Object dimensionScores = state.llmResult() == null
+                ? (state.keywordResult() == null ? List.of() : state.keywordResult().getOrDefault("dimension_scores", List.of()))
+                : state.llmResult().getOrDefault("dimension_scores", List.of());
+        report.setScoreJson(objectMapper.writeValueAsString(dimensionScores));
+        report.setScoreDetailJson(objectMapper.writeValueAsString(dimensionScores));
+        report.setFileAnalysisJson(objectMapper.writeValueAsString(state.llmResult() == null ? List.of() : state.llmResult().getOrDefault("file_analysis", List.of())));
+        report.setTokenUsage(tokenUsage(state.llmResult()));
+        report.setReportMarkdown(combinedMarkdown(state, average));
+        report.setSuggestion(objectMapper.writeValueAsString(scoreDetails));
+        reportMapper.insert(report);
+        reportMapper.delete(new LambdaQueryWrapper<TAiReport>()
+                .eq(TAiReport::getSubmissionId, task.getSubmissionId())
+                .ne(TAiReport::getId, report.getId()));
+        return report;
+    }
+
+    private void updateSubmissionAfterCombinedScoring(TSubmission submission, TAiReport report) {
+        boolean complete = SCORING_SUCCESS.equals(report.getLlmStatus()) && SCORING_SUCCESS.equals(report.getKeywordStatus());
+        boolean partial = SCORING_SUCCESS.equals(report.getLlmStatus()) || SCORING_SUCCESS.equals(report.getKeywordStatus());
+        submission.setStatus(complete ? "scored" : (partial ? "partial_scored" : "failed"));
+        submission.setCurrentScore(complete ? report.getAverageScore() : null);
+        submission.setCurrentReportId(report.getId());
+        submissionMapper.updateById(submission);
+    }
+
+    private void markCallbackFailurePartial(TAiTask task, TSubmission submission, String message) {
+        try {
+            CombinedScoringState state = restoreCombinedState(task);
+            state.llmStatus(SCORING_FAILED);
+            state.llmError(message);
+            TAiReport report = saveCombinedReport(task, state);
+            if (submission != null) {
+                updateSubmissionAfterCombinedScoring(submission, report);
+            }
+        } catch (Exception ignored) {
+            if (submission != null) {
+                submission.setStatus("failed");
+                submissionMapper.updateById(submission);
+            }
+        }
+    }
+
+    private BigDecimal resultScore(Map<String, Object> result) {
+        return result == null ? BigDecimal.ZERO : decimal(result.get("total_score"));
+    }
+
+    private int tokenUsage(Map<String, Object> result) {
+        if (result == null) {
+            return 0;
+        }
+        Object value = result.getOrDefault("token_usage", 0);
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    private String combinedModelName(CombinedScoringState state) {
+        String llm = state.llmResult() == null ? aiModel() : persistedModelName(state.llmResult());
+        return llm + " + keyword-rules";
+    }
+
+    private String combinedMarkdown(CombinedScoringState state, BigDecimal average) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("# 并行评分报告\n\n");
+        builder.append("## 评分状态\n\n");
+        builder.append("- 大模型评分: ").append(statusText(state.llmStatus())).append(scoreSuffix(state.llmResult())).append("\n");
+        builder.append("- 关键字匹配评分: ").append(statusText(state.keywordStatus())).append(scoreSuffix(state.keywordResult())).append("\n");
+        builder.append("- 最终平均分: ").append(average == null ? "未生成（两种方式都成功后才生成）" : average + "/100").append("\n\n");
+        if (SCORING_FAILED.equals(state.llmStatus()) && hasText(state.llmError())) {
+            builder.append("> 大模型评分失败原因: ").append(state.llmError()).append("\n\n");
+        }
+        if (SCORING_FAILED.equals(state.keywordStatus()) && hasText(state.keywordError())) {
+            builder.append("> 关键字匹配评分失败原因: ").append(state.keywordError()).append("\n\n");
+        }
+        builder.append("## 大模型评分结果\n\n");
+        builder.append(state.llmResult() == null ? "大模型评分尚无可展示结果。\n\n" : state.llmResult().getOrDefault("report_markdown", "").toString()).append("\n\n");
+        builder.append("## 关键字匹配评分结果\n\n");
+        builder.append(state.keywordResult() == null ? "关键字匹配评分尚无可展示结果。\n" : state.keywordResult().getOrDefault("report_markdown", "").toString()).append("\n");
+        return builder.toString();
+    }
+
+    private String scoreSuffix(Map<String, Object> result) {
+        return result == null ? "" : "（" + resultScore(result) + "/100）";
+    }
+
+    private String statusText(String status) {
+        if (SCORING_SUCCESS.equals(status)) {
+            return "成功";
+        }
+        if (SCORING_FAILED.equals(status)) {
+            return "失败";
+        }
+        return "等待中";
+    }
+
+    private String combinedErrorMessage(CombinedScoringState state) {
+        List<String> errors = new ArrayList<>();
+        if (SCORING_FAILED.equals(state.llmStatus())) {
+            errors.add("大模型评分失败: " + (hasText(state.llmError()) ? state.llmError() : "未知错误"));
+        }
+        if (SCORING_FAILED.equals(state.keywordStatus())) {
+            errors.add("关键字匹配评分失败: " + (hasText(state.keywordError()) ? state.keywordError() : "未知错误"));
+        }
+        return String.join("; ", errors);
+    }
+
+    private boolean isFallbackResult(Map<String, Object> result) {
+        return "fallback".equalsIgnoreCase(String.valueOf(result.getOrDefault("model_source", "")))
+                || String.valueOf(result.getOrDefault("model_name", "")).toLowerCase(Locale.ROOT).contains("fallback");
+    }
+
     /** 将评分结果持久化到 t_ai_report 表 */
     private TAiReport saveReport(TAiTask task, Map<String, Object> result) throws Exception {
         TAiReport report = new TAiReport();
@@ -1374,5 +1793,68 @@ public class AiScoringService {
             return BigDecimal.valueOf(number.doubleValue()).setScale(2, RoundingMode.HALF_UP);
         }
         return new BigDecimal(value.toString()).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private record KeywordMatch(List<String> hits, List<String> misses, int totalCount, double ratio) {
+        int hitCount() {
+            return hits.size();
+        }
+    }
+
+    private static class CombinedScoringState {
+        private String llmStatus = SCORING_PENDING;
+        private String keywordStatus = SCORING_PENDING;
+        private String llmError;
+        private String keywordError;
+        private Map<String, Object> llmResult;
+        private Map<String, Object> keywordResult;
+
+        String llmStatus() {
+            return llmStatus;
+        }
+
+        void llmStatus(String value) {
+            this.llmStatus = value == null ? SCORING_PENDING : value;
+        }
+
+        String keywordStatus() {
+            return keywordStatus;
+        }
+
+        void keywordStatus(String value) {
+            this.keywordStatus = value == null ? SCORING_PENDING : value;
+        }
+
+        String llmError() {
+            return llmError;
+        }
+
+        void llmError(String value) {
+            this.llmError = value;
+        }
+
+        String keywordError() {
+            return keywordError;
+        }
+
+        void keywordError(String value) {
+            this.keywordError = value;
+        }
+
+        Map<String, Object> llmResult() {
+            return llmResult;
+        }
+
+        void llmResult(Map<String, Object> value) {
+            this.llmResult = value;
+        }
+
+        Map<String, Object> keywordResult() {
+            return keywordResult;
+        }
+
+        void keywordResult(Map<String, Object> value) {
+            this.keywordResult = value;
+        }
     }
 }

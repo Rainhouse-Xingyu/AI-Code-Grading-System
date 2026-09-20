@@ -26,7 +26,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -115,7 +114,14 @@ class AiScoringServiceQueueTests {
         assertThat(queued.getStatus()).isEqualTo("running");
         assertThat(queued.getStartTime()).isBeforeOrEqualTo(LocalDateTime.now());
         verify(listOperations).leftPush(eq("ai:grading:tasks"), any(String.class));
-        verify(reportMapper, never()).insert(any(TAiReport.class));
+        org.mockito.ArgumentCaptor<TAiReport> reportCaptor = org.mockito.ArgumentCaptor.forClass(TAiReport.class);
+        verify(reportMapper).insert(reportCaptor.capture());
+        TAiReport partialReport = reportCaptor.getValue();
+        assertThat(partialReport.getSubmissionId()).isEqualTo(99L);
+        assertThat(partialReport.getTaskId()).isEqualTo(42L);
+        assertThat(partialReport.getKeywordStatus()).isEqualTo("success");
+        assertThat(partialReport.getLlmStatus()).isEqualTo("pending");
+        assertThat(partialReport.getTotalScore()).isNull();
 
         org.mockito.ArgumentCaptor<String> payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(listOperations).leftPush(eq("ai:grading:tasks"), payloadCaptor.capture());

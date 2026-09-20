@@ -45,6 +45,34 @@ public class TAiReport implements Serializable {
     @TableField("total_score")
     private BigDecimal totalScore;
 
+    /** 大模型评分状态：pending / success / failed */
+    @TableField("llm_status")
+    private String llmStatus;
+
+    /** 关键字匹配评分状态：pending / success / failed */
+    @TableField("keyword_status")
+    private String keywordStatus;
+
+    /** 大模型总分 */
+    @TableField("llm_score")
+    private BigDecimal llmScore;
+
+    /** 关键字匹配总分 */
+    @TableField("keyword_score")
+    private BigDecimal keywordScore;
+
+    /** 两种评分成功后的平均总分 */
+    @TableField("average_score")
+    private BigDecimal averageScore;
+
+    /** 大模型评分完整 JSON */
+    @TableField("llm_result_json")
+    private String llmResultJson;
+
+    /** 关键字匹配评分完整 JSON */
+    @TableField("keyword_result_json")
+    private String keywordResultJson;
+
     /** 各维度得分JSON（已废弃，V1.1后使用score_detail_json替代） */
     @ApiModelProperty("分项评分")
     @TableField("score_json")

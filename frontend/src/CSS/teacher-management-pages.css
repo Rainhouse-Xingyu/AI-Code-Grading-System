@@ -536,9 +536,9 @@
 
 .rubric-template-page-panel .template-meta-form {
   display: grid;
-  grid-template-columns: minmax(200px, 0.75fr) minmax(280px, 1.25fr);
+  grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1.15fr);
   gap: 0 12px;
-  align-items: end;
+  align-items: start;
   padding: 14px 15px 0;
 }
 
@@ -586,6 +586,12 @@
 
 .rubric-template-page-panel .template-item-table .el-input-number {
   width: 100%;
+}
+
+.template-item-switch-cell {
+  display: flex;
+  justify-content: center;
+  min-width: 52px;
 }
 
 .template-list-empty,

@@ -6,26 +6,7 @@
         <span class="auth-eyebrow">AI-POWERED ASSESSMENT</span>
         <h1>程序设计作业<br /><em>智能评分工作台</em></h1>
         <p>从代码提交到 AI 初评、教师复核，再到成绩发布，让每一次评分清晰、高效且可追溯。</p>
-        <ol class="auth-flow" aria-label="评分流程">
-          <li>
-            <span>01</span>
-            <div><strong>提交作业</strong><small>按课程要求上传代码</small></div>
-          </li>
-          <li>
-            <span>02</span>
-            <div><strong>AI 初评</strong><small>批量评分并生成报告</small></div>
-          </li>
-          <li>
-            <span>03</span>
-            <div><strong>教师复核</strong><small>依据 Rubric 调整评分</small></div>
-          </li>
-          <li>
-            <span>04</span>
-            <div><strong>成绩发布</strong><small>统一推送最终结果</small></div>
-          </li>
-        </ol>
       </div>
-      <div class="auth-story-footer"><span /> 服务运行正常</div>
     </aside>
     <main class="auth-form-zone">
       <div class="auth-mobile-wordmark">CodeGrader</div>
