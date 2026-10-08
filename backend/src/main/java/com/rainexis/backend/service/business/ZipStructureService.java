@@ -49,6 +49,7 @@ public class ZipStructureService {
     private static final Set<String> CODE_EXTENSIONS = Set.of(
             ".java", ".py", ".c", ".cpp", ".h", ".hpp", ".js", ".ts", ".go", ".rs", ".kt", ".swift"
     );
+    private static final Set<String> AI_PROCESS_EXTENSIONS = Set.of(".json");
     private static final Set<String> BLACKLIST_DIRS = Set.of(
             "__macosx", ".git", ".idea", ".vscode", "node_modules", "target", "build", "dist", "out", "__pycache__"
     );
@@ -89,6 +90,7 @@ public class ZipStructureService {
 
     private StructureResult analyzeWithCharset(Path zipPath, String language, Charset zipCharset) {
         List<Map<String, Object>> files = new ArrayList<>();
+        List<Map<String, Object>> aiProcessFiles = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         long[] totalSize = {0L};
         try (ZipInputStream zip = new ZipInputStream(java.nio.file.Files.newInputStream(zipPath), zipCharset)) {
@@ -110,6 +112,18 @@ public class ZipStructureService {
                     if (buffer.size() <= MAX_SINGLE_FILE) {
                         buffer.write(chunk, 0, read);
                     }
+                }
+                if (AI_PROCESS_EXTENSIONS.contains(extension)) {
+                    if (buffer.size() > MAX_SINGLE_FILE) {
+                        warnings.add("跳过超过 1MB 的 AI 交互 JSON 文件: " + entryName);
+                        continue;
+                    }
+                    DecodedContent decoded = decodeCodeContent(buffer.toByteArray());
+                    if (!StandardCharsets.UTF_8.equals(decoded.charset())) {
+                        warnings.add("AI 交互 JSON 已从 " + decoded.charset().displayName() + " 转为 UTF-8: " + entryName);
+                    }
+                    aiProcessFiles.add(aiProcessFile(entryName, buffer.size(), decoded));
+                    continue;
                 }
                 if (!CODE_EXTENSIONS.contains(extension)) {
                     warnings.add("跳过非代码文件: " + entryName);
@@ -154,6 +168,7 @@ public class ZipStructureService {
         root.put("language", language);
         root.put("structure_summary", buildSummary(files));
         root.put("file_tree", files);
+        root.put("ai_process", buildAiProcessPayload(aiProcessFiles));
         root.put("dependency_graph", buildDependencyGraph(files));
         root.put("security_scan", securityScan);
         root.put("warnings", warnings);
@@ -234,6 +249,130 @@ public class ZipStructureService {
             case ".ts" -> "typescript";
             default -> fallback == null ? "unknown" : fallback;
         };
+    }
+
+    private Map<String, Object> aiProcessFile(String path, int size, DecodedContent decoded) {
+        Map<String, Object> file = new LinkedHashMap<>();
+        file.put("path", path);
+        file.put("size", size);
+        file.put("encoding", decoded.charset().displayName());
+        file.put("content", decoded.content());
+        try {
+            Object parsed = objectMapper.readValue(decoded.content(), Object.class);
+            file.put("valid_json", true);
+            file.put("message_count", countJsonMessages(parsed));
+            file.put("conversation_preview", aiJsonPreview(parsed));
+        } catch (Exception ex) {
+            file.put("valid_json", false);
+            file.put("parse_error", ex.getMessage());
+            file.put("message_count", 0);
+        }
+        return file;
+    }
+
+    private Map<String, Object> buildAiProcessPayload(List<Map<String, Object>> files) {
+        int validCount = 0;
+        int messageCount = 0;
+        for (Map<String, Object> file : files) {
+            if (Boolean.TRUE.equals(file.get("valid_json"))) {
+                validCount++;
+            }
+            Object count = file.get("message_count");
+            if (count instanceof Number number) {
+                messageCount += number.intValue();
+            }
+        }
+        return Map.of(
+                "submitted", !files.isEmpty(),
+                "total_json_files", files.size(),
+                "valid_json_files", validCount,
+                "message_count", messageCount,
+                "files", files
+        );
+    }
+
+    private int countJsonMessages(Object value) {
+        if (value instanceof List<?> items) {
+            int nested = 0;
+            for (Object item : items) {
+                nested += countJsonMessages(item);
+            }
+            return nested == 0 && !items.isEmpty() ? items.size() : nested;
+        }
+        if (value instanceof Map<?, ?> map) {
+            if (looksLikeMessage(map)) {
+                return 1;
+            }
+            int count = 0;
+            for (Object item : map.values()) {
+                count += countJsonMessages(item);
+            }
+            return count;
+        }
+        return 0;
+    }
+
+    private boolean looksLikeMessage(Map<?, ?> map) {
+        return map.containsKey("role") && (map.containsKey("content") || map.containsKey("text") || map.containsKey("message"))
+                || map.containsKey("prompt") || map.containsKey("answer") || map.containsKey("response");
+    }
+
+    private List<Map<String, Object>> aiJsonPreview(Object value) {
+        List<Map<String, Object>> preview = new ArrayList<>();
+        collectAiJsonPreview(value, preview);
+        return preview;
+    }
+
+    private void collectAiJsonPreview(Object value, List<Map<String, Object>> preview) {
+        if (preview.size() >= 20 || value == null) {
+            return;
+        }
+        if (value instanceof List<?> items) {
+            for (Object item : items) {
+                collectAiJsonPreview(item, preview);
+                if (preview.size() >= 20) {
+                    return;
+                }
+            }
+            return;
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            return;
+        }
+        if (looksLikeMessage(map)) {
+            String role = textValue(map, "role", "unknown");
+            String content = firstTextValue(map, "content", "text", "message", "prompt", "answer", "response");
+            preview.add(Map.of("role", role, "content", truncate(content, 600)));
+            return;
+        }
+        for (Object item : map.values()) {
+            collectAiJsonPreview(item, preview);
+            if (preview.size() >= 20) {
+                return;
+            }
+        }
+    }
+
+    private String firstTextValue(Map<?, ?> map, String... keys) {
+        for (String key : keys) {
+            String value = textValue(map, key, "");
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String textValue(Map<?, ?> map, String key, String fallback) {
+        Object value = map.get(key);
+        return value == null ? fallback : String.valueOf(value);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value == null ? "" : value;
+        }
+        return value.substring(0, maxLength) + "...";
     }
 
     /** 扫描代码内容和文件名中试图操纵评分的提示注入话术 */

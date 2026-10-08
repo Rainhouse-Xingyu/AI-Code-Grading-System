@@ -35,6 +35,7 @@ public class RubricParserService {
     private static final Pattern WORD_DIMENSION_HEADING =
             Pattern.compile("(.+?)[(（]\\s*(?:权重[:：])?\\s*(\\d+(?:\\.\\d+)?)\\s*[%分]?[)）]");
     private static final Pattern SCORE_TEXT = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*分?");
+    private static final Pattern SCORE_RANGE = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[~～\\-—至到]\\s*(\\d+(?:\\.\\d+)?)\\s*分?");
 
     public RubricParserService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -92,6 +93,7 @@ public class RubricParserService {
 
     private List<Map<String, Object>> parseStandardExcel(Sheet sheet, DataFormatter formatter) {
         List<Map<String, Object>> dimensions = new ArrayList<>();
+        Map<String, Map<String, Object>> bandDimensions = new LinkedHashMap<>();
         validateExcelHeader(sheet.getRow(0), formatter);
         for (int i = 1; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
@@ -106,12 +108,35 @@ public class RubricParserService {
             String itemName = formatter.formatCellValue(row.getCell(2)).trim();
             String itemScore = formatter.formatCellValue(row.getCell(3)).trim();
             String criteria = formatter.formatCellValue(row.getCell(4)).trim();
-            BigDecimal maxScore = itemScore.isBlank()
-                    ? parseNumberStrict(weight, "Excel 第 " + (i + 1) + " 行缺少子项分值或权重")
-                    : parseNumberStrict(itemScore, "Excel 第 " + (i + 1) + " 行子项分值格式不正确");
+            ScoreSpec scoreSpec = itemScore.isBlank()
+                    ? parseScoreSpecStrict(weight, "Excel 第 " + (i + 1) + " 行缺少子项分值或权重")
+                    : parseScoreSpecStrict(itemScore, "Excel 第 " + (i + 1) + " 行子项分值格式不正确");
+            BigDecimal maxScore = scoreSpec.max();
+            BigDecimal weightScore = weight.isBlank()
+                    ? maxScore
+                    : parseScoreSpecStrict(weight, "Excel 第 " + (i + 1) + " 行权重格式不正确").max();
+            String pointName = itemName.isBlank() ? name : itemName;
+            String bandKey = name + "\u0001" + pointName;
+            Map<String, Object> existingBandDimension = bandDimensions.get(bandKey);
+            if (scoreSpec.range() || existingBandDimension != null) {
+                Map<String, Object> dimension = existingBandDimension;
+                if (dimension == null) {
+                    BigDecimal dimensionMaxScore = weightScore.compareTo(maxScore) > 0 ? weightScore : maxScore;
+                    dimension = dimension(name, weightScore, dimensionMaxScore, "");
+                    dimension.put("items", List.of(new LinkedHashMap<>(Map.of(
+                            "name", pointName,
+                            "max_score", dimensionMaxScore,
+                            "criteria", ""
+                    ))));
+                    dimensions.add(dimension);
+                    bandDimensions.put(bandKey, dimension);
+                }
+                appendScoreBand(dimension, scoreSpec, criteria);
+                continue;
+            }
             Map<String, Object> dimension = dimension(
                     name,
-                    weight.isBlank() ? maxScore : parseNumberStrict(weight, "Excel 第 " + (i + 1) + " 行权重格式不正确"),
+                    weightScore,
                     maxScore,
                     criteria
             );
@@ -393,18 +418,67 @@ public class RubricParserService {
         value.put("max_score", maxScore);
         value.put("criteria", criteria == null ? "" : criteria);
         value.put("items", List.of(Map.of("name", name, "max_score", maxScore, "criteria", criteria == null ? "" : criteria)));
+        if (isManualReviewName(name)) {
+            value.put("manual_review_required", true);
+            value.put("manual_review_reason", "该维度需要教师结合系统运行交互效果手动评分。");
+        }
         return value;
     }
 
+    @SuppressWarnings("unchecked")
+    private void appendScoreBand(Map<String, Object> dimension, ScoreSpec scoreSpec, String criteria) {
+        List<Map<String, Object>> bands = (List<Map<String, Object>>) dimension.computeIfAbsent("scoring_bands", ignored -> new ArrayList<Map<String, Object>>());
+        Map<String, Object> band = new LinkedHashMap<>();
+        band.put("score_min", scoreSpec.min());
+        band.put("score_max", scoreSpec.max());
+        band.put("score_range", scoreSpec.label());
+        band.put("criteria", criteria == null ? "" : criteria);
+        bands.add(band);
+        String summary = scoreBandSummary(bands);
+        dimension.put("criteria", summary);
+        Object itemsValue = dimension.get("items");
+        if (itemsValue instanceof List<?> items && !items.isEmpty() && items.get(0) instanceof Map<?, ?> rawItem) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            rawItem.forEach((key, value) -> item.put(String.valueOf(key), value));
+            item.put("criteria", summary);
+            item.put("scoring_bands", bands);
+            dimension.put("items", List.of(item));
+        }
+    }
+
+    private String scoreBandSummary(List<Map<String, Object>> bands) {
+        StringBuilder builder = new StringBuilder("评分档位：");
+        for (Map<String, Object> band : bands) {
+            builder.append("\n- ")
+                    .append(band.get("score_range"))
+                    .append("分：")
+                    .append(band.getOrDefault("criteria", ""));
+        }
+        return builder.toString();
+    }
+
     private BigDecimal parseNumberStrict(String value, String message) {
+        return parseScoreSpecStrict(value, message).max();
+    }
+
+    private ScoreSpec parseScoreSpecStrict(String value, String message) {
         if (value == null || value.isBlank()) {
             throw BusinessException.badRequest(message);
+        }
+        Matcher rangeMatcher = SCORE_RANGE.matcher(value);
+        if (rangeMatcher.find()) {
+            BigDecimal first = new BigDecimal(rangeMatcher.group(1));
+            BigDecimal second = new BigDecimal(rangeMatcher.group(2));
+            BigDecimal min = first.min(second);
+            BigDecimal max = first.max(second);
+            return new ScoreSpec(min, max, min.stripTrailingZeros().toPlainString() + "~" + max.stripTrailingZeros().toPlainString(), true);
         }
         Matcher matcher = SCORE_TEXT.matcher(value);
         if (!matcher.find()) {
             throw BusinessException.badRequest(message);
         }
-        return new BigDecimal(matcher.group(1));
+        BigDecimal score = new BigDecimal(matcher.group(1));
+        return new ScoreSpec(score, score, score.stripTrailingZeros().toPlainString(), false);
     }
 
     private BigDecimal firstScore(String value) {
@@ -421,6 +495,10 @@ public class RubricParserService {
 
     private String cleanScoreText(String value) {
         return value == null ? "" : value.replaceAll("[（(]\\s*\\d+(?:\\.\\d+)?\\s*分\\s*[）)]", "").trim();
+    }
+
+    private boolean isManualReviewName(String value) {
+        return value != null && value.contains("系统交互");
     }
 
     private List<String> normalizeLines(List<String> rawLines) {
@@ -461,5 +539,8 @@ public class RubricParserService {
 
     /** 解析后的评分标准结果 */
     public record ParsedRubric(String rubricJson, String parsedJson) {
+    }
+
+    private record ScoreSpec(BigDecimal min, BigDecimal max, String label, boolean range) {
     }
 }

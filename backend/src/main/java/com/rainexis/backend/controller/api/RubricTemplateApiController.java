@@ -201,7 +201,7 @@ public class RubricTemplateApiController {
             for (JsonNode dimension : dimensions) {
                 String dimensionName = firstText(dimension.path("name").asText(), "评分维度", "评分维度");
                 BigDecimal dimensionScore = decimalNode(dimension.path("max_score"), "评分点分数格式不正确");
-                String dimensionCriteria = dimension.path("criteria").asText("");
+                String dimensionCriteria = criteriaWithBands(dimension.path("criteria").asText(""), dimension.path("scoring_bands"));
                 JsonNode rubricItems = dimension.path("items");
                 if (rubricItems.isArray() && !rubricItems.isEmpty()) {
                     int pointOrder = 1;
@@ -209,13 +209,17 @@ public class RubricTemplateApiController {
                         BigDecimal pointScore = item.hasNonNull("max_score")
                                 ? decimalNode(item.path("max_score"), "评分点分数格式不正确")
                                 : dimensionScore;
+                        String itemCriteria = criteriaWithBands(
+                                firstText(item.path("criteria").asText(), dimensionCriteria, ""),
+                                item.path("scoring_bands").isMissingNode() ? dimension.path("scoring_bands") : item.path("scoring_bands")
+                        );
                         items.add(new ItemRequest(
                                 dimensionOrder,
                                 dimensionName,
                                 pointOrder++,
                                 firstText(item.path("name").asText(), dimensionName, "评分点"),
                                 pointScore,
-                                firstText(item.path("criteria").asText(), dimensionCriteria, ""),
+                                itemCriteria,
                                 true
                         ));
                     }
@@ -230,6 +234,23 @@ public class RubricTemplateApiController {
         } catch (Exception ex) {
             throw BusinessException.badRequest("评分标准文件解析为模板失败: " + ex.getMessage());
         }
+    }
+
+    private String criteriaWithBands(String criteria, JsonNode bands) {
+        String base = criteria == null ? "" : criteria;
+        if (base.contains("评分档位") || bands == null || !bands.isArray() || bands.isEmpty()) {
+            return base;
+        }
+        StringBuilder builder = new StringBuilder(base.isBlank() ? "评分档位：" : base + "\n评分档位：");
+        for (JsonNode band : bands) {
+            builder.append("\n- ")
+                    .append(band.path("score_range").asText(
+                            band.path("score_min").asText("") + "~" + band.path("score_max").asText("")
+                    ))
+                    .append("分：")
+                    .append(band.path("criteria").asText(""));
+        }
+        return builder.toString();
     }
 
     private BigDecimal decimalNode(JsonNode node, String message) {

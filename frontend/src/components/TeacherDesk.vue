@@ -428,7 +428,10 @@
                         模型 {{ subScoreStatusText(row.llmStatus) }}
                       </el-tag>
                       <el-tag :type="subScoreStatusType(row.keywordStatus)" size="small" effect="plain">
-                        关键字 {{ subScoreStatusText(row.keywordStatus) }}
+                        规则 {{ subScoreStatusText(row.keywordStatus) }}
+                      </el-tag>
+                      <el-tag :type="subScoreStatusType(row.aiProcessStatus)" size="small" effect="plain">
+                        AI过程 {{ subScoreStatusText(row.aiProcessStatus) }}
                       </el-tag>
                     </div>
                   </template>
@@ -754,7 +757,12 @@
                     </div>
                     <div class="table-shell score-table-shell">
                       <el-table :data="dimensionScores" class="dimension-table" size="small" border empty-text="报告中没有分项得分">
-                        <el-table-column prop="name" label="评分维度" min-width="140" />
+                        <el-table-column label="评分维度" min-width="160">
+                          <template #default="{ row }">
+                            <span>{{ row.name }}</span>
+                            <el-tag v-if="row.manual_review_required" size="small" type="warning" effect="plain" class="ml-2">待人工</el-tag>
+                          </template>
+                        </el-table-column>
                         <el-table-column label="得分" width="130">
                           <template #default="{ row }">
                             <el-input-number
@@ -2747,7 +2755,7 @@ async function saveReview() {
   if (!selectedSubmission.value || !report.value) return;
   try {
     await props.api.put(`/api/v1/teacher-reviews/${selectedSubmission.value}`, {
-      finalScore: Number(finalScore.value || report.value.totalScore),
+      finalScore: Number(dimensionScores.value.length ? dimensionTotal.value : (finalScore.value || report.value.totalScore)),
       finalComment: reviewComment.value,
       modifiedJson: JSON.stringify(dimensionScores.value.length ? dimensionScores.value : parseDimensionScores(report.value.scoreJson)),
       modifiedMarkdown: reportMarkdown.value || report.value.reportMarkdown || ""
@@ -2768,7 +2776,9 @@ function parseDimensionScores(value) {
       name: item.name || item.dimension || "评分维度",
       score: Number(item.score || 0),
       max_score: Number(item.max_score ?? item.maxScore ?? item.weight ?? 100),
-      comment: item.comment || item.feedback || ""
+      comment: item.comment || item.feedback || "",
+      manual_review_required: Boolean(item.manual_review_required),
+      manual_review_status: item.manual_review_status || ""
     }));
   } catch {
     return [];

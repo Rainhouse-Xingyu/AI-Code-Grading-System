@@ -13,6 +13,14 @@ import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+try:
+    from langchain_core.prompts import ChatPromptTemplate
+    from langgraph.graph import END, StateGraph
+except ImportError:  # pragma: no cover - local unit tests may run before optional deps are installed.
+    ChatPromptTemplate = None
+    StateGraph = None
+    END = "__end__"
+
 
 def bounded_int(value: str | None, default: int, minimum: int, maximum: int) -> int:
     if value is None or not value.strip():
@@ -99,6 +107,7 @@ class ScoreRequest(BaseModel):
     code_json: dict[str, Any]
     rubric_json: dict[str, Any]
     dependency_json: dict[str, Any] | None = None
+    previous_report_markdown: str | None = None
 
 
 class CallbackRequest(BaseModel):
@@ -418,7 +427,7 @@ def chat_completions_url(base: str) -> str:
 
 # 异步函数，用于使用 DeepSeek 模型进行评分
 async def score_with_deepseek(request: ScoreRequest) -> dict[str, Any]:
-    result = await score_with_openai_compatible(
+    result = await score_with_workflow(
         request=request,
         base_url=DEEPSEEK_BASE_URL,
         api_key=DEEPSEEK_API_KEY,
@@ -431,7 +440,7 @@ async def score_with_deepseek(request: ScoreRequest) -> dict[str, Any]:
 
 # 异步函数，用于使用本地模型进行评分
 async def score_with_local_model(request: ScoreRequest) -> dict[str, Any]:
-    result = await score_with_openai_compatible(
+    result = await score_with_workflow(
         request=request,
         base_url=LOCAL_AI_BASE_URL,
         api_key=LOCAL_AI_API_KEY,
@@ -442,6 +451,205 @@ async def score_with_local_model(request: ScoreRequest) -> dict[str, Any]:
     result["model_source"] = "local"
     return result
 
+
+async def score_with_workflow(
+    request: ScoreRequest,
+    base_url: str,
+    api_key: str,
+    model: str,
+    timeout: int,
+) -> dict[str, Any]:
+    initial_state = {
+        "request": request,
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "timeout": timeout,
+        "source_rubric": None,
+        "ai_process_rubric": None,
+        "source_llm_result": None,
+        "ai_process_result": None,
+    }
+    if StateGraph is None:
+        state = split_scoring_rubric(initial_state)
+        state = await source_llm_score_node(state)
+        state = await ai_process_score_node(state)
+        return compose_workflow_result(state)
+
+    graph = StateGraph(dict)
+    graph.add_node("split_scoring_rubric", split_scoring_rubric)
+    graph.add_node("source_llm_score", source_llm_score_node)
+    graph.add_node("ai_process_score", ai_process_score_node)
+    graph.add_node("compose_result", compose_result_node)
+    graph.set_entry_point("split_scoring_rubric")
+    graph.add_edge("split_scoring_rubric", "source_llm_score")
+    graph.add_edge("source_llm_score", "ai_process_score")
+    graph.add_edge("ai_process_score", "compose_result")
+    graph.add_edge("compose_result", END)
+    compiled = graph.compile()
+    final_state = await compiled.ainvoke(initial_state)
+    return final_state["result"]
+
+
+def split_scoring_rubric(state: dict[str, Any]) -> dict[str, Any]:
+    request: ScoreRequest = state["request"]
+    source_rubric = deepcopy(request.rubric_json)
+    dimensions = list(source_rubric.get("dimensions") or [])
+    source_dimensions = [
+        item for item in dimensions
+        if not is_ai_process_dimension(item) and not is_manual_review_dimension(item)
+    ]
+    ai_dimensions = [item for item in dimensions if is_ai_process_dimension(item)]
+    source_rubric["dimensions"] = source_dimensions
+    ai_process_rubric = deepcopy(request.rubric_json)
+    ai_process_rubric["dimensions"] = ai_dimensions or [{"name": "AI过程性应用", "max_score": 0, "criteria": "未配置 AI过程性应用评分点。"}]
+    state["source_rubric"] = source_rubric
+    state["ai_process_rubric"] = ai_process_rubric
+    return state
+
+
+async def source_llm_score_node(state: dict[str, Any]) -> dict[str, Any]:
+    result = await score_with_openai_compatible(
+        request=state["request"],
+        base_url=state["base_url"],
+        api_key=state["api_key"],
+        model=state["model"],
+        timeout=state["timeout"],
+        rubric_json=state["source_rubric"],
+        prompt_kind="source",
+    )
+    state["source_llm_result"] = result
+    return state
+
+
+async def ai_process_score_node(state: dict[str, Any]) -> dict[str, Any]:
+    request: ScoreRequest = state["request"]
+    ai_process = request.code_json.get("ai_process") or {}
+    ai_rubric = state["ai_process_rubric"]
+    ai_dimensions = ai_rubric.get("dimensions") or []
+    max_score = safe_decimal(ai_dimensions[0].get("max_score", ai_dimensions[0].get("weight", 0))) if ai_dimensions else Decimal("0")
+    if max_score <= 0:
+        state["ai_process_result"] = ai_process_not_configured_result()
+        return state
+    if not ai_process.get("submitted"):
+        state["ai_process_result"] = ai_process_not_submitted_result(ai_rubric)
+        return state
+    if int(ai_process.get("valid_json_files") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="AI过程性应用 JSON 存在但均无法解析")
+    result = await score_with_openai_compatible(
+        request=request,
+        base_url=state["base_url"],
+        api_key=state["api_key"],
+        model=state["model"],
+        timeout=state["timeout"],
+        rubric_json=ai_rubric,
+        prompt_kind="ai_process",
+    )
+    state["ai_process_result"] = result
+    return state
+
+
+def compose_result_node(state: dict[str, Any]) -> dict[str, Any]:
+    state["result"] = compose_workflow_result(state)
+    return state
+
+
+def compose_workflow_result(state: dict[str, Any]) -> dict[str, Any]:
+    source = state["source_llm_result"] or {}
+    ai_process = state["ai_process_result"] or ai_process_not_submitted_result(state["ai_process_rubric"])
+    source_total = safe_decimal(source.get("total_score", 0))
+    ai_total = safe_decimal(ai_process.get("total_score", 0))
+    final_total = min(source_total + ai_total, Decimal("100")).quantize(Decimal("0.01"))
+    dimensions = list(source.get("dimension_scores") or []) + list(ai_process.get("dimension_scores") or [])
+    issues = list(source.get("issues") or []) + list(ai_process.get("issues") or [])
+    report_markdown = "\n\n".join(
+        [
+            "# LangGraph 综合评分结果",
+            "## 源码大模型评分",
+            str(source.get("report_markdown") or "源码评分未返回报告。"),
+            "## AI过程性应用评分",
+            str(ai_process.get("report_markdown") or "AI过程性应用未返回报告。"),
+        ]
+    )
+    return {
+        "model_name": source.get("model_name", state["model"]),
+        "model_source": source.get("model_source", "llm"),
+        "workflow": "langchain+langgraph" if StateGraph is not None else "langchain+sequential-fallback",
+        "total_score": float(final_total),
+        "dimension_scores": dimensions,
+        "issues": issues,
+        "file_analysis": source.get("file_analysis", []),
+        "report_markdown": report_markdown,
+        "token_usage": int(source.get("token_usage") or 0) + int(ai_process.get("token_usage") or 0),
+        "source_llm_result": source,
+        "ai_process_result": ai_process,
+    }
+
+
+def is_ai_process_dimension(dimension: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(dimension.get(key, "")) for key in ("name", "criteria", "description")
+    ).lower()
+    return (
+        "ai过程" in text
+        or "ai 过程" in text
+        or "过程性应用" in text
+        or "ai_process" in text
+        or "ai process" in text
+    )
+
+
+def is_manual_review_dimension(dimension: dict[str, Any]) -> bool:
+    if dimension.get("manual_review_required") is True:
+        return True
+    text = " ".join(
+        str(dimension.get(key, "")) for key in ("name", "criteria", "description")
+    )
+    return "系统交互" in text
+
+
+def ai_process_not_configured_result() -> dict[str, Any]:
+    return {
+        "model_name": "ai-process-not-configured",
+        "model_source": "rule",
+        "total_score": 0,
+        "dimension_scores": [],
+        "issues": [],
+        "file_analysis": [],
+        "report_markdown": "## AI过程性应用评分\n\n评分标准中未配置 AI过程性应用评分点。",
+        "token_usage": 0,
+    }
+
+
+def ai_process_not_submitted_result(rubric: dict[str, Any]) -> dict[str, Any]:
+    dimensions = rubric.get("dimensions") or [{"name": "AI过程性应用", "max_score": 0}]
+    dimension = dimensions[0]
+    max_score = safe_decimal(dimension.get("max_score", dimension.get("weight", 0)))
+    row = {
+        "name": dimension.get("name", "AI过程性应用"),
+        "score": 0,
+        "max_score": float(max_score),
+        "comment": "未提交可核验的 AI 交互 JSON，暂记 0 分，后续教师可复核修改。",
+    }
+    return {
+        "model_name": "ai-process-not-submitted",
+        "model_source": "rule",
+        "total_score": 0,
+        "dimension_scores": [row],
+        "issues": [
+            {
+                "severity": "warning",
+                "file": "ai_process",
+                "line": 1,
+                "description": "学生未提交 AI 交互 JSON，AI过程性应用暂记 0 分。",
+            }
+        ],
+        "file_analysis": [],
+        "report_markdown": f"## AI过程性应用评分\n\n- 得分: 0/{max_score}\n- 说明: 未提交可核验的 AI 交互 JSON，暂记 0 分。",
+        "token_usage": 0,
+    }
+
+
 # 异步函数，用于使用 OpenAI 兼容的接口进行评分
 async def score_with_openai_compatible(
     request: ScoreRequest,
@@ -449,8 +657,11 @@ async def score_with_openai_compatible(
     api_key: str,
     model: str,
     timeout: int,
+    rubric_json: dict[str, Any] | None = None,
+    prompt_kind: str = "source",
 ) -> dict[str, Any]:
-    prompt = build_prompt(request)
+    active_rubric = rubric_json or request.rubric_json
+    prompt = build_prompt(request, active_rubric, prompt_kind)
     body = {
         "model": model,
         "messages": [
@@ -506,12 +717,12 @@ async def score_with_openai_compatible(
     )
     content = model_content(response_json)
     result = parse_model_json(response_json)
-    result = normalize_result(result, request.rubric_json)
+    result = normalize_result(result, active_rubric)
     result["model_name"] = response_json.get("model", model)
     if isinstance(usage, dict) and usage.get("total_tokens") is not None:
         result["token_usage"] = usage["total_tokens"]
     try:
-        validate_result(result, request.rubric_json)
+        validate_result(result, active_rubric)
     except HTTPException as exc:
         keys = ", ".join(result.keys())
         raise HTTPException(
@@ -762,7 +973,10 @@ def validate_result(result: dict[str, Any], rubric: dict[str, Any]) -> None:
                 raise HTTPException(status_code=400, detail=f"issue.{field} is required")
 
 
-def build_prompt(request: ScoreRequest) -> str:
+def build_prompt(request: ScoreRequest, rubric_json: dict[str, Any] | None = None, prompt_kind: str = "source") -> str:
+    active_rubric = rubric_json or request.rubric_json
+    if prompt_kind == "ai_process":
+        return build_ai_process_prompt(request, active_rubric)
     prompt_code_json = prepare_code_json_for_prompt(request.code_json)
     security_scan = prompt_code_json.get("security_scan", {})
     dependency_json = request.dependency_json or prompt_code_json.get("dependency_graph", {})
@@ -811,7 +1025,7 @@ def build_prompt(request: ScoreRequest) -> str:
 }}
 
 评分标准 JSON:
-{json.dumps(request.rubric_json, ensure_ascii=False)}
+{json.dumps(active_rubric, ensure_ascii=False)}
 
 结构化代码 JSON（含 file_tree、各文件路径和内容、structure_summary）:
 {json.dumps(prompt_code_json, ensure_ascii=False)}
@@ -824,6 +1038,94 @@ def build_prompt(request: ScoreRequest) -> str:
 
 输出格式约束:
 total_score, dimension_scores, issues, file_analysis, report_markdown, token_usage
+"""
+
+
+def build_ai_process_prompt(request: ScoreRequest, rubric_json: dict[str, Any]) -> str:
+    ai_process = deepcopy(request.code_json.get("ai_process") or {})
+    files = [item for item in ai_process.get("files", []) if isinstance(item, dict)]
+    compact_files = []
+    for item in files[:8]:
+        compact = {
+            "path": item.get("path"),
+            "valid_json": item.get("valid_json"),
+            "message_count": item.get("message_count"),
+            "parse_error": item.get("parse_error"),
+            "conversation_preview": item.get("conversation_preview", []),
+        }
+        content = item.get("content")
+        if isinstance(content, str) and len(content) <= 6000:
+            compact["content"] = content
+        elif isinstance(content, str):
+            compact["content_preview"] = content[:6000]
+        compact_files.append(compact)
+    ai_process["files"] = compact_files
+    source_summary = {
+        "total_files": request.code_json.get("total_files"),
+        "total_lines": request.code_json.get("total_lines"),
+        "language": request.code_json.get("language"),
+        "structure_summary": request.code_json.get("structure_summary"),
+        "dependency_graph": request.code_json.get("dependency_graph"),
+    }
+    if ChatPromptTemplate is not None:
+        template = ChatPromptTemplate.from_messages(
+            [
+                ("system", "你是一名严格但公正的编程课程助教。只返回 JSON。"),
+                ("user", AI_PROCESS_PROMPT_TEMPLATE),
+            ]
+        )
+        return template.format(
+            rubric_json=json.dumps(rubric_json, ensure_ascii=False),
+            ai_process_json=json.dumps(ai_process, ensure_ascii=False),
+            source_summary_json=json.dumps(source_summary, ensure_ascii=False),
+        )
+    return AI_PROCESS_PROMPT_TEMPLATE.format(
+        rubric_json=json.dumps(rubric_json, ensure_ascii=False),
+        ai_process_json=json.dumps(ai_process, ensure_ascii=False),
+        source_summary_json=json.dumps(source_summary, ensure_ascii=False),
+    )
+
+
+AI_PROCESS_PROMPT_TEMPLATE = """
+系统角色指令:
+你是一名严格但公正的编程课程助教，请根据学生提交的 AI 交互 JSON 和最终源码摘要，评价“AI过程性应用”。
+
+评分重点:
+1. 判断 AI 交互记录与最终源码、作业要求的相关率。
+2. 判断记录是否完整、可核验，是否体现学生追问、核验 AI 建议、据此修改的过程。
+3. 多个 JSON 文件需要合并判断，不能只看单个片段。
+4. 如果记录像临时补材料、与源码关联弱、缺少核验修改过程，应降低分数。
+
+强制输出要求:
+1. 顶层必须且只能使用这些字段: total_score, dimension_scores, issues, file_analysis, report_markdown, token_usage。
+2. dimension_scores 必须逐项对应评分标准 JSON 的 dimensions 顺序；每项 name 必须逐字原样复制。
+3. issues 必须是数组；没有明显问题时也至少返回一条 severity 为 suggestion 的建议。
+4. file_analysis 可以为空数组。
+5. report_markdown 必须包含相关率、有效 JSON 文件数、主要证据和扣分原因。
+6. 只返回合法 JSON 对象。
+
+输出 JSON 模板:
+{{
+  "total_score": 0,
+  "dimension_scores": [
+    {{"name": "AI过程性应用", "score": 0, "max_score": 20, "comment": "评分理由"}}
+  ],
+  "issues": [
+    {{"severity": "suggestion", "file": "ai_process", "line": 1, "description": "问题或建议"}}
+  ],
+  "file_analysis": [],
+  "report_markdown": "# AI过程性应用评分\\n\\n...",
+  "token_usage": 0
+}}
+
+评分标准 JSON:
+{rubric_json}
+
+AI交互 JSON 摘要:
+{ai_process_json}
+
+最终源码摘要:
+{source_summary_json}
 """
 
 

@@ -536,6 +536,10 @@ public class AssignmentApiController {
             dimension.put("weight", maxScore);
             dimension.put("max_score", maxScore);
             dimension.put("criteria", item.getCriteria());
+            if (isManualReviewItem(item)) {
+                dimension.put("manual_review_required", true);
+                dimension.put("manual_review_reason", "系统交互性需要教师结合运行输入输出效果手动评分。");
+            }
             dimension.put("items", List.of(Map.of(
                     "name", item.getPointName(),
                     "original_score", item.getPointScore(),
@@ -550,6 +554,14 @@ public class AssignmentApiController {
                 "normalization_formula", "归一化满分 = 原始满分 / 勾选项原始满分之和 × 100",
                 "dimensions", dimensions
         );
+    }
+
+    private boolean isManualReviewItem(TRubricTemplateItem item) {
+        String text = String.join(" ",
+                item.getDimensionName() == null ? "" : item.getDimensionName(),
+                item.getPointName() == null ? "" : item.getPointName(),
+                item.getCriteria() == null ? "" : item.getCriteria());
+        return text.contains("系统交互");
     }
 
     public record AssignmentRequest(String title, String courseName, String description, String language, String className, List<String> classNames,

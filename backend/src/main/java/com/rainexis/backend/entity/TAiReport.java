@@ -53,6 +53,10 @@ public class TAiReport implements Serializable {
     @TableField("keyword_status")
     private String keywordStatus;
 
+    /** AI过程性应用评分状态：pending / success / failed */
+    @TableField("ai_process_status")
+    private String aiProcessStatus;
+
     /** 大模型总分 */
     @TableField("llm_score")
     private BigDecimal llmScore;
@@ -60,6 +64,10 @@ public class TAiReport implements Serializable {
     /** 关键字匹配总分 */
     @TableField("keyword_score")
     private BigDecimal keywordScore;
+
+    /** AI过程性应用得分 */
+    @TableField("ai_process_score")
+    private BigDecimal aiProcessScore;
 
     /** 两种评分成功后的平均总分 */
     @TableField("average_score")
@@ -72,6 +80,10 @@ public class TAiReport implements Serializable {
     /** 关键字匹配评分完整 JSON */
     @TableField("keyword_result_json")
     private String keywordResultJson;
+
+    /** AI过程性应用评分完整 JSON */
+    @TableField("ai_process_result_json")
+    private String aiProcessResultJson;
 
     /** 各维度得分JSON（已废弃，V1.1后使用score_detail_json替代） */
     @ApiModelProperty("分项评分")

@@ -3,3 +3,7 @@ uvicorn[standard]==0.32.1
 httpx==0.28.1
 pydantic==2.10.4
 redis==5.2.1
+langchain-core==0.3.63
+langgraph==0.4.8
+langgraph-checkpoint==2.0.26
+langgraph-prebuilt==0.2.2

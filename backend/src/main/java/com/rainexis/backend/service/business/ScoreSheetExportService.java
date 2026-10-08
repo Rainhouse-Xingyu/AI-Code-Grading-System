@@ -77,6 +77,7 @@ public class ScoreSheetExportService {
                         .thenComparing(row -> text(row.username())))
                 .toList();
         List<String> dimensions = dimensionColumns(assignment, rows);
+        Set<String> manualDimensions = manualDimensionNames(assignment);
         try (Workbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("成绩汇总");
             CellStyle headerStyle = headerStyle(workbook);
@@ -84,9 +85,9 @@ public class ScoreSheetExportService {
             writeHeader(sheet, headerStyle, dimensions);
             int rowIndex = 1;
             for (ScoreRow scoreRow : rows) {
-                writeRow(sheet.createRow(rowIndex++), scoreRow, dimensions, numberStyle);
+                writeRow(sheet.createRow(rowIndex++), scoreRow, dimensions, manualDimensions, numberStyle);
             }
-            for (int i = 0; i < 10 + dimensions.size(); i++) {
+            for (int i = 0; i < 11 + dimensions.size(); i++) {
                 sheet.autoSizeColumn(i);
                 sheet.setColumnWidth(i, Math.min(Math.max(sheet.getColumnWidth(i), 2800), 9000));
             }
@@ -120,7 +121,7 @@ public class ScoreSheetExportService {
                 .last("limit 1"));
         if (submission == null) {
             return new ScoreRow(student.getClassName(), student.getUsername(), student.getRealName(),
-                    "未提交", false, null, "", Map.of());
+                    "未提交", false, false, null, "", Map.of());
         }
         TTeacherReview review = latestReview(submission.getId());
         TAiReport report = latestReport(submission.getId());
@@ -133,7 +134,7 @@ public class ScoreSheetExportService {
                 : report == null ? submission.getCurrentScore() : report.getTotalScore();
         return new ScoreRow(student.getClassName(), student.getUsername(), student.getRealName(),
                 submission.getStatus(), Boolean.TRUE.equals(submission.getLate()),
-                totalScore, publishStatusText(publish), scores);
+                review != null, totalScore, publishStatusText(publish), scores);
     }
 
     private List<String> dimensionColumns(TAssignment assignment, List<ScoreRow> rows) {
@@ -176,6 +177,57 @@ public class ScoreSheetExportService {
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private Set<String> manualDimensionNames(TAssignment assignment) {
+        String rubricJson = activeRubricJson(assignment);
+        if (rubricJson == null) {
+            return Set.of();
+        }
+        try {
+            Map<String, Object> root = objectMapper.readValue(rubricJson, new TypeReference<>() {
+            });
+            Object dimensions = root.get("dimensions");
+            if (!(dimensions instanceof List<?> values)) {
+                return Set.of();
+            }
+            Set<String> names = new LinkedHashSet<>();
+            for (Object value : values) {
+                if (value instanceof Map<?, ?> dimension && dimension.get("name") != null && isManualReviewDimension(dimension)) {
+                    names.add(String.valueOf(dimension.get("name")));
+                }
+            }
+            return names;
+        } catch (Exception ignored) {
+            return Set.of();
+        }
+    }
+
+    private String activeRubricJson(TAssignment assignment) {
+        TRubric rubric = rubricMapper.selectOne(new LambdaQueryWrapper<TRubric>()
+                .eq(TRubric::getAssignmentId, assignment.getId())
+                .eq(TRubric::getIsActive, (byte) 1)
+                .orderByDesc(TRubric::getRubricVersion)
+                .last("limit 1"));
+        if (rubric != null && rubric.getRubricJson() != null && !rubric.getRubricJson().isBlank()) {
+            return rubric.getRubricJson();
+        }
+        if (assignment.getNormalizedRubricJson() != null && !assignment.getNormalizedRubricJson().isBlank()) {
+            return assignment.getNormalizedRubricJson();
+        }
+        return null;
+    }
+
+    private boolean isManualReviewDimension(Map<?, ?> dimension) {
+        Object manual = dimension.get("manual_review_required");
+        if (manual instanceof Boolean value && value) {
+            return true;
+        }
+        String text = String.join(" ",
+                dimension.get("name") == null ? "" : String.valueOf(dimension.get("name")),
+                dimension.get("criteria") == null ? "" : String.valueOf(dimension.get("criteria")),
+                dimension.get("description") == null ? "" : String.valueOf(dimension.get("description")));
+        return text.contains("系统交互");
     }
 
     private Map<String, BigDecimal> dimensionScores(TTeacherReview review, TAiReport report) {
@@ -250,9 +302,10 @@ public class ScoreSheetExportService {
             cell(header, column++, dimension, headerStyle);
         }
         cell(header, column, "总分", headerStyle);
+        cell(header, column + 1, "备注", headerStyle);
     }
 
-    private void writeRow(Row row, ScoreRow scoreRow, List<String> dimensions, CellStyle numberStyle) {
+    private void writeRow(Row row, ScoreRow scoreRow, List<String> dimensions, Set<String> manualDimensions, CellStyle numberStyle) {
         int column = 0;
         cell(row, column++, scoreRow.className(), null);
         cell(row, column++, scoreRow.username(), null);
@@ -260,16 +313,26 @@ public class ScoreSheetExportService {
         cell(row, column++, submissionStatusText(scoreRow.status()), null);
         cell(row, column++, scoreRow.late() ? "是" : "否", null);
         cell(row, column++, scoreRow.publishStatus(), null);
+        boolean manualPending = false;
         for (String dimension : dimensions) {
             BigDecimal score = scoreRow.dimensionScores().get(dimension);
-            if (score == null) {
+            boolean manual = manualDimensions.contains(dimension);
+            if (manual && !scoreRow.reviewed() && scoreRow.totalScore() != null) {
+                cell(row, column++, "待教师评分", null);
+                manualPending = true;
+            } else if (score == null) {
                 row.createCell(column++);
             } else {
                 numericCell(row, column++, score, numberStyle);
             }
         }
-        if (scoreRow.totalScore() != null) {
+        if (manualPending) {
+            cell(row, column, "待教师确认", null);
+        } else if (scoreRow.totalScore() != null) {
             numericCell(row, column, scoreRow.totalScore(), numberStyle);
+        }
+        if (manualPending) {
+            cell(row, column + 1, "存在人工待评项；当前自动评分为 " + scoreRow.totalScore(), null);
         }
     }
 
@@ -365,6 +428,7 @@ public class ScoreSheetExportService {
                             String realName,
                             String status,
                             boolean late,
+                            boolean reviewed,
                             BigDecimal totalScore,
                             String publishStatus,
                             Map<String, BigDecimal> dimensionScores) {

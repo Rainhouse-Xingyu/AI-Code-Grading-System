@@ -432,6 +432,7 @@ function submissionStatusText(status) {
   if (status === "published") return "已发布";
   if (status === "reviewed") return "已复核";
   if (status === "scored") return "已评分";
+  if (status === "partial_scored") return "部分评分";
   if (status === "scoring") return "评分中";
   if (status === "parsed") return "已解析";
   if (status === "uploaded") return "已上传";
@@ -444,6 +445,7 @@ function submissionStatusType(status) {
   if (status === "published") return "success";
   if (status === "reviewed") return "primary";
   if (status === "scored") return "warning";
+  if (status === "partial_scored") return "warning";
   if (status === "failed" || status === "parse_failed") return "danger";
   return "info";
 }

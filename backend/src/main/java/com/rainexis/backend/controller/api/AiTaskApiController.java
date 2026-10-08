@@ -219,8 +219,10 @@ public class AiTaskApiController {
         payload.put("submissionFileName", submission == null ? "" : submission.getFileName());
         payload.put("llmStatus", report == null ? "" : report.getLlmStatus());
         payload.put("keywordStatus", report == null ? "" : report.getKeywordStatus());
+        payload.put("aiProcessStatus", report == null ? "" : report.getAiProcessStatus());
         payload.put("llmScore", report == null ? null : report.getLlmScore());
         payload.put("keywordScore", report == null ? null : report.getKeywordScore());
+        payload.put("aiProcessScore", report == null ? null : report.getAiProcessScore());
         payload.put("averageScore", report == null ? null : report.getAverageScore());
         return payload;
     }
