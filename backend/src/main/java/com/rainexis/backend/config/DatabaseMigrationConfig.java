@@ -35,6 +35,16 @@ public class DatabaseMigrationConfig {
         widenAssignmentClassName();
         ensureUserColumns();
         ensureAssignmentRubricColumns();
+        addColumnIfMissing("t_assignment", "parent_assignment_id", "BIGINT");
+        addColumnIfMissing("t_assignment", "teacher_release_required", "TINYINT DEFAULT 0");
+        addColumnIfMissing("t_rubric_template_item", "scoring_method", "VARCHAR(30)");
+        addColumnIfMissing("t_rubric_template_item", "score_bands_json", "LONGTEXT");
+        String releaseSchema = jdbcTemplate.execute((ConnectionCallback<String>) connection ->
+                connection.getMetaData().getDatabaseProductName().toLowerCase().contains("mysql") ? connection.getCatalog() : connection.getSchema());
+        Integer releaseIndex = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE LOWER(table_schema)=LOWER(?) AND LOWER(table_name)='t_assignment' AND LOWER(constraint_name)='uq_assignment_parent_class'", Integer.class, releaseSchema);
+        if (releaseIndex == null || releaseIndex == 0) {
+            jdbcTemplate.execute("ALTER TABLE t_assignment ADD CONSTRAINT uq_assignment_parent_class UNIQUE (parent_assignment_id, class_name)");
+        }
         ensureSemesterTables();
         ensureAiTaskColumns();
         normalizeFallbackTokenUsage();

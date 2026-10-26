@@ -79,6 +79,7 @@ services:
       backend:
         condition: service_started
     environment:
+      APP_ENV_FILE: /config/.env
       WORKER_ENABLED: "true"
       AI_WORKER_CONCURRENCY: ${AI_WORKER_CONCURRENCY:-5}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_pass}@redis:6379/0
@@ -101,6 +102,8 @@ services:
       AI_PROMPT_SUMMARY_MAX_LINES: ${AI_PROMPT_SUMMARY_MAX_LINES:-100}
     ports:
       - "${MODEL_SERVICE_PORT:-8000}:8000"
+    volumes:
+      - ./.env:/config/.env:ro
 
   local-inference:
     profiles: ["local-inference"]

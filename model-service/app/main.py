@@ -1,10 +1,10 @@
 import json
 import logging
-import os
 import asyncio
 import time
 from copy import deepcopy
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from decimal import Decimal
 from typing import Any
 
@@ -12,6 +12,7 @@ import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from app.config import config_path, config_value, read_config
 
 try:
     from langchain_core.prompts import ChatPromptTemplate
@@ -32,41 +33,81 @@ def bounded_int(value: str | None, default: int, minimum: int, maximum: int) -> 
     return max(minimum, min(maximum, parsed))
 
 
-# 模型服务配置
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://ai-gateway.neusoft.edu.cn/v1/models")
-LOCAL_AI_BASE_URL = os.getenv("LOCAL_AI_BASE_URL", "")
-LOCAL_AI_API_KEY = os.getenv("LOCAL_AI_API_KEY", "")
-LOCAL_AI_MODEL = os.getenv("LOCAL_AI_MODEL", "Qwen2.5-Coder-7B-Instruct")
-AI_MODEL = os.getenv("AI_MODEL", "DeepSeek/DeepSeek-R1")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "deepseek").lower()
-ENABLE_REMOTE = os.getenv("AI_ENABLE_REMOTE", "false").lower() == "true"
-REDIS_URL = os.getenv("REDIS_URL", "")
-REDIS_QUEUE = os.getenv("AI_REDIS_QUEUE", "ai:grading:tasks")
+# 与后端读取同一 APP_ENV_FILE；未指定时使用项目根目录 .env。
+_STARTUP_CONFIG = read_config()
+
+
+def startup_value(name: str, default: str = "", *, allow_empty: bool = False) -> str:
+    return config_value(_STARTUP_CONFIG, name, default, allow_empty=allow_empty)
+
+
+def startup_int(name: str, default: int) -> int:
+    return bounded_int(startup_value(name), default, 1, 1_000_000)
+
+
+def enabled(value: str) -> bool:
+    return value.lower() in {"true", "1", "yes"}
+
+
+DEEPSEEK_API_KEY = startup_value("DEEPSEEK_API_KEY", allow_empty=True)
+DEEPSEEK_BASE_URL = startup_value("DEEPSEEK_BASE_URL", "https://ai-gateway.neusoft.edu.cn/v1/models")
+LOCAL_AI_BASE_URL = startup_value("LOCAL_AI_BASE_URL", allow_empty=True)
+LOCAL_AI_API_KEY = startup_value("LOCAL_AI_API_KEY", allow_empty=True)
+LOCAL_AI_MODEL = startup_value("LOCAL_AI_MODEL", "Qwen2.5-Coder-7B-Instruct")
+AI_MODEL = startup_value("AI_MODEL", "DeepSeek/DeepSeek-R1")
+AI_PROVIDER = startup_value("AI_PROVIDER", "deepseek").lower()
+ENABLE_REMOTE = enabled(startup_value("AI_ENABLE_REMOTE", "false"))
+REDIS_URL = startup_value("REDIS_URL")
+REDIS_QUEUE = startup_value("AI_REDIS_QUEUE", "ai:grading:tasks")
 REDIS_CANCELLED_TASKS = f"{REDIS_QUEUE}:cancelled"
-BACKEND_CALLBACK_URL = os.getenv("BACKEND_CALLBACK_URL", "")
-WORKER_ENABLED = os.getenv("WORKER_ENABLED", "false").lower() == "true"
+BACKEND_CALLBACK_URL = startup_value("BACKEND_CALLBACK_URL")
+WORKER_ENABLED = enabled(startup_value("WORKER_ENABLED", "false"))
 WORKER_CONCURRENCY_MIN = 1
 WORKER_CONCURRENCY_MAX = 10
 WORKER_CONCURRENCY = bounded_int(
-    os.getenv("AI_WORKER_CONCURRENCY"),
+    startup_value("AI_WORKER_CONCURRENCY"),
     default=5,
     minimum=WORKER_CONCURRENCY_MIN,
     maximum=WORKER_CONCURRENCY_MAX,
 )
-DEEPSEEK_TIMEOUT_SECONDS = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "600"))
+DEEPSEEK_TIMEOUT_SECONDS = startup_int("DEEPSEEK_TIMEOUT_SECONDS", 600)
 DEEPSEEK_RETRY_DELAYS = (3, 10)
 CALLBACK_RETRY_DELAYS = (1, 3)
-LOCAL_MODEL_TIMEOUT_SECONDS = int(os.getenv("LOCAL_AI_TIMEOUT_SECONDS", "600"))
-MAX_COMPLETION_TOKENS = int(os.getenv("AI_MAX_COMPLETION_TOKENS", "8192"))
-PROMPT_FULL_CODE_CHAR_LIMIT = int(os.getenv("AI_PROMPT_FULL_CODE_CHAR_LIMIT", "8000"))
-PROMPT_CORE_CODE_CHAR_LIMIT = int(os.getenv("AI_PROMPT_CORE_CODE_CHAR_LIMIT", "30000"))
-PROMPT_CORE_TARGET_CHARS = int(os.getenv("AI_PROMPT_CORE_TARGET_CHARS", "16000"))
-PROMPT_SUMMARY_MAX_LINES = int(os.getenv("AI_PROMPT_SUMMARY_MAX_LINES", "100"))
+LOCAL_MODEL_TIMEOUT_SECONDS = startup_int("LOCAL_AI_TIMEOUT_SECONDS", 600)
+MAX_COMPLETION_TOKENS = startup_int("AI_MAX_COMPLETION_TOKENS", 8192)
+PROMPT_FULL_CODE_CHAR_LIMIT = startup_int("AI_PROMPT_FULL_CODE_CHAR_LIMIT", 8000)
+PROMPT_CORE_CODE_CHAR_LIMIT = startup_int("AI_PROMPT_CORE_CODE_CHAR_LIMIT", 30000)
+PROMPT_CORE_TARGET_CHARS = startup_int("AI_PROMPT_CORE_TARGET_CHARS", 16000)
+PROMPT_SUMMARY_MAX_LINES = startup_int("AI_PROMPT_SUMMARY_MAX_LINES", 100)
 logger = logging.getLogger("ai-code-grading.model-service")
 ACTIVE_WORKER_IDS: set[int] = set()
 RUNNING_WORKER_TASKS: list[asyncio.Task[None]] = []
 HTTP_CLIENT: httpx.AsyncClient | None = None
+SCORING_CONFIG: ContextVar[dict[str, Any] | None] = ContextVar("scoring_config", default=None)
+
+
+def runtime_model_config() -> dict[str, Any]:
+    """One immutable-by-convention snapshot per grading request, including retries."""
+    values = read_config()
+    def text(key: str, default: str, allow_empty: bool = False) -> str:
+        return config_value(values, key, default, allow_empty=allow_empty)
+    return {
+        "provider": text("AI_PROVIDER", AI_PROVIDER).lower(),
+        "model": text("AI_MODEL", AI_MODEL),
+        "remote_enabled": enabled(text("AI_ENABLE_REMOTE", str(ENABLE_REMOTE))),
+        "api_key": text("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY, True),
+        "base_url": text("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL),
+        "local_url": text("LOCAL_AI_BASE_URL", LOCAL_AI_BASE_URL, True),
+        "local_key": text("LOCAL_AI_API_KEY", LOCAL_AI_API_KEY, True),
+        "local_model": text("LOCAL_AI_MODEL", LOCAL_AI_MODEL),
+        "remote_timeout": bounded_int(text("DEEPSEEK_TIMEOUT_SECONDS", str(DEEPSEEK_TIMEOUT_SECONDS)), DEEPSEEK_TIMEOUT_SECONDS, 1, 1_000_000),
+        "local_timeout": bounded_int(text("LOCAL_AI_TIMEOUT_SECONDS", str(LOCAL_MODEL_TIMEOUT_SECONDS)), LOCAL_MODEL_TIMEOUT_SECONDS, 1, 1_000_000),
+        "max_tokens": bounded_int(text("AI_MAX_COMPLETION_TOKENS", str(MAX_COMPLETION_TOKENS)), MAX_COMPLETION_TOKENS, 1, 1_000_000),
+    }
+
+
+def model_config() -> dict[str, Any]:
+    return SCORING_CONFIG.get() or runtime_model_config()
 
 # FastAPI 生命周期管理器，用于启动和停止后台任务
 @asynccontextmanager
@@ -119,14 +160,16 @@ class CallbackRequest(BaseModel):
 # FastAPI 路由定义
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    config = runtime_model_config()
     return {
         "status": "ok",
-        "provider": AI_PROVIDER,
-        "model": AI_MODEL,
-        "remote_enabled": ENABLE_REMOTE,
-        "deepseek_configured": bool(DEEPSEEK_API_KEY),
-        "deepseek_url": chat_completions_url(DEEPSEEK_BASE_URL),
-        "local_model_url": chat_completions_url(LOCAL_AI_BASE_URL) if LOCAL_AI_BASE_URL else None,
+        "provider": config["provider"],
+        "model": config["model"],
+        "remote_enabled": config["remote_enabled"],
+        "deepseek_configured": bool(config["api_key"]),
+        "deepseek_url": chat_completions_url(config["base_url"]),
+        "local_model_url": chat_completions_url(config["local_url"]) if config["local_url"] else None,
+        "config_file": str(config_path()),
         "worker_enabled": WORKER_ENABLED,
         "worker_concurrency": WORKER_CONCURRENCY,
         "worker_concurrency_max": WORKER_CONCURRENCY_MAX,
@@ -140,8 +183,17 @@ async def health() -> dict[str, Any]:
 
 @app.post("/score")
 async def score(request: ScoreRequest) -> dict[str, Any]:
-    if AI_PROVIDER == "local":
-        if not LOCAL_AI_BASE_URL:
+    token = SCORING_CONFIG.set(runtime_model_config())
+    try:
+        return await score_configured(request)
+    finally:
+        SCORING_CONFIG.reset(token)
+
+
+async def score_configured(request: ScoreRequest) -> dict[str, Any]:
+    config = model_config()
+    if config["provider"] == "local":
+        if not config["local_url"]:
             fallback = fallback_score(request)
             fallback["fallback_reason"] = "local provider selected but LOCAL_AI_BASE_URL is empty"
             logger.warning(
@@ -161,7 +213,7 @@ async def score(request: ScoreRequest) -> dict[str, Any]:
             )
             return fallback
 
-    if ENABLE_REMOTE and DEEPSEEK_API_KEY:
+    if config["remote_enabled"] and config["api_key"]:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -176,7 +228,7 @@ async def score(request: ScoreRequest) -> dict[str, Any]:
                 )
                 if attempt < len(DEEPSEEK_RETRY_DELAYS):
                     await asyncio.sleep(DEEPSEEK_RETRY_DELAYS[attempt])
-        if LOCAL_AI_BASE_URL:
+        if config["local_url"]:
             try:
                 fallback = await score_with_local_model(request)
                 fallback["fallback_reason"] = exception_message(last_error)
@@ -206,9 +258,11 @@ async def score(request: ScoreRequest) -> dict[str, Any]:
             fallback["fallback_reason"],
         )
         return fallback
-    if ENABLE_REMOTE and not DEEPSEEK_API_KEY:
-        logger.warning("Remote scoring enabled but DEEPSEEK_API_KEY is empty; deterministic fallback used")
-    return fallback_score(request)
+    reason = "DEEPSEEK_API_KEY is empty" if config["remote_enabled"] else "remote model disabled by AI_ENABLE_REMOTE=false"
+    logger.warning("%s; deterministic fallback used", reason)
+    result = fallback_score(request)
+    result["fallback_reason"] = reason
+    return result
 
 # FastAPI 内部回调接口，用于接收评分结果
 @app.post("/internal/callback")
@@ -427,27 +481,29 @@ def chat_completions_url(base: str) -> str:
 
 # 异步函数，用于使用 DeepSeek 模型进行评分
 async def score_with_deepseek(request: ScoreRequest) -> dict[str, Any]:
+    config = model_config()
     result = await score_with_workflow(
         request=request,
-        base_url=DEEPSEEK_BASE_URL,
-        api_key=DEEPSEEK_API_KEY,
-        model=AI_MODEL,
-        timeout=DEEPSEEK_TIMEOUT_SECONDS,
+        base_url=config["base_url"],
+        api_key=config["api_key"],
+        model=config["model"],
+        timeout=config["remote_timeout"],
     )
-    result.setdefault("model_name", AI_MODEL)
+    result.setdefault("model_name", config["model"])
     result["model_source"] = "deepseek"
     return result
 
 # 异步函数，用于使用本地模型进行评分
 async def score_with_local_model(request: ScoreRequest) -> dict[str, Any]:
+    config = model_config()
     result = await score_with_workflow(
         request=request,
-        base_url=LOCAL_AI_BASE_URL,
-        api_key=LOCAL_AI_API_KEY,
-        model=LOCAL_AI_MODEL,
-        timeout=LOCAL_MODEL_TIMEOUT_SECONDS,
+        base_url=config["local_url"],
+        api_key=config["local_key"],
+        model=config["local_model"],
+        timeout=config["local_timeout"],
     )
-    result.setdefault("model_name", LOCAL_AI_MODEL)
+    result.setdefault("model_name", config["local_model"])
     result["model_source"] = "local"
     return result
 
@@ -509,6 +565,9 @@ def split_scoring_rubric(state: dict[str, Any]) -> dict[str, Any]:
 
 
 async def source_llm_score_node(state: dict[str, Any]) -> dict[str, Any]:
+    if not state["source_rubric"].get("dimensions"):
+        state["source_llm_result"] = {"total_score": 0, "dimension_scores": [], "issues": [], "file_analysis": [], "report_markdown": "未配置源码 AI 评分项。", "token_usage": 0}
+        return state
     result = await score_with_openai_compatible(
         request=state["request"],
         base_url=state["base_url"],
@@ -587,6 +646,8 @@ def compose_workflow_result(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_ai_process_dimension(dimension: dict[str, Any]) -> bool:
+    if is_manual_review_dimension(dimension):
+        return False
     text = " ".join(
         str(dimension.get(key, "")) for key in ("name", "criteria", "description")
     ).lower()
@@ -600,6 +661,8 @@ def is_ai_process_dimension(dimension: dict[str, Any]) -> bool:
 
 
 def is_manual_review_dimension(dimension: dict[str, Any]) -> bool:
+    if dimension.get("scoring_method"):
+        return dimension["scoring_method"] == "manual"
     if dimension.get("manual_review_required") is True:
         return True
     text = " ".join(
@@ -661,6 +724,7 @@ async def score_with_openai_compatible(
     prompt_kind: str = "source",
 ) -> dict[str, Any]:
     active_rubric = rubric_json or request.rubric_json
+    max_tokens = model_config()["max_tokens"]
     prompt = build_prompt(request, active_rubric, prompt_kind)
     body = {
         "model": model,
@@ -669,12 +733,12 @@ async def score_with_openai_compatible(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_completion_tokens": MAX_COMPLETION_TOKENS,
+        "max_completion_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     request_url = chat_completions_url(base_url)
-    provider_label = "DeepSeek" if base_url == DEEPSEEK_BASE_URL else "local model"
+    provider_label = "DeepSeek" if base_url == model_config()["base_url"] else "local model"
     started_at = time.monotonic()
     logger.info(
         "%s request start task_id=%s submission_id=%s model=%s prompt_chars=%s timeout=%ss "
@@ -685,7 +749,7 @@ async def score_with_openai_compatible(
         model,
         len(prompt),
         timeout,
-        MAX_COMPLETION_TOKENS,
+        max_tokens,
         request_url,
     )
     try:

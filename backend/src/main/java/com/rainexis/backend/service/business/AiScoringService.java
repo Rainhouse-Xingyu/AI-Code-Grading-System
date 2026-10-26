@@ -1,6 +1,7 @@
 package com.rainexis.backend.service.business;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rainexis.backend.common.BusinessException;
@@ -202,7 +203,19 @@ public class AiScoringService {
         task.setStartTime(null);
         task.setEndTime(null);
         task.setRetryCount(task.getRetryCount() == null ? 1 : task.getRetryCount() + 1);
-        taskMapper.updateById(task);
+        // updateById 默认忽略 null，必须显式清除上一次执行的时间和错误。
+        int updated = taskMapper.update(null, new LambdaUpdateWrapper<TAiTask>()
+                .eq(TAiTask::getId, taskId)
+                .eq(TAiTask::getStatus, "failed")
+                .set(TAiTask::getStatus, "pending")
+                .set(TAiTask::getBatchId, task.getBatchId())
+                .set(TAiTask::getRetryCount, task.getRetryCount())
+                .set(TAiTask::getErrorMessage, null)
+                .set(TAiTask::getStartTime, null)
+                .set(TAiTask::getEndTime, null));
+        if (updated == 0) {
+            throw BusinessException.conflict("任务状态已变化，请刷新后再试");
+        }
         log(task, "INFO", "教师手动重试失败任务，第 " + task.getRetryCount() + " 次重试", task.getModelName(), 0);
         TSubmission submission = submissionMapper.selectById(task.getSubmissionId());
         if (submission == null) {
@@ -295,6 +308,11 @@ public class AiScoringService {
             }
             String sourceRubricJson = sourceRubricJson(rubric.getRubricJson());
             CombinedScoringState state = restoreCombinedState(task);
+            if (rubricDimensions(sourceRubricJson).isEmpty()) {
+                state.llmResult(emptyScoringResult("未配置源码 AI 评分项"));
+                state.llmStatus(SCORING_SUCCESS);
+                state.llmError(null);
+            }
             if (!SCORING_SUCCESS.equals(state.keywordStatus())) {
                 try {
                     state.keywordResult(keywordScore(structure.getStructureJson(), sourceRubricJson));
@@ -312,7 +330,7 @@ public class AiScoringService {
                 state.aiProcessStatus(SCORING_SUCCESS);
                 state.aiProcessError(null);
             }
-            if (queueEnabled()) {
+            if (queueEnabled() && (!SCORING_SUCCESS.equals(state.llmStatus()) || !SCORING_SUCCESS.equals(state.aiProcessStatus()))) {
                 TAiReport partialReport = saveCombinedReport(task, state);
                 updateSubmissionAfterCombinedScoring(submission, partialReport);
                 if (isCancelled(task)) {
@@ -769,7 +787,7 @@ public class AiScoringService {
 
     /** 校验AI返回的评分结果格式：总分范围、维度覆盖、问题字段完整性 */
     private void validateResult(Map<String, Object> result, String rubricJson) throws Exception {
-        if (!(result.get("dimension_scores") instanceof List<?> dimensions) || dimensions.isEmpty()) {
+        if (!(result.get("dimension_scores") instanceof List<?> dimensions)) {
             throw BusinessException.badRequest("AI 返回缺少 dimension_scores");
         }
         if (!(result.get("issues") instanceof List<?> issues)) {
@@ -781,6 +799,7 @@ public class AiScoringService {
         Map<String, Object> rubric = objectMapper.readValue(rubricJson, new TypeReference<>() {
         });
         List<Map<String, Object>> rubricDimensions = (List<Map<String, Object>>) rubric.getOrDefault("dimensions", List.of());
+        if (!rubricDimensions.isEmpty() && dimensions.isEmpty()) throw BusinessException.badRequest("AI 返回缺少 dimension_scores");
         Map<String, BigDecimal> rubricMaxScores = new LinkedHashMap<>();
         for (Map<String, Object> dimension : rubricDimensions) {
             String name = requiredText(dimension, "name", "Rubric 维度缺少 name");
@@ -1102,6 +1121,7 @@ public class AiScoringService {
     }
 
     private boolean isAiProcessDimension(Map<String, Object> dimension) {
+        if (isManualReviewDimension(dimension)) return false;
         String text = String.join(" ",
                 String.valueOf(dimension.getOrDefault("name", "")),
                 String.valueOf(dimension.getOrDefault("criteria", "")),
@@ -1114,15 +1134,17 @@ public class AiScoringService {
     }
 
     private boolean isManualReviewDimension(Map<String, Object> dimension) {
-        Object manual = dimension.get("manual_review_required");
-        if (manual instanceof Boolean value && value) {
-            return true;
-        }
-        String text = String.join(" ",
-                String.valueOf(dimension.getOrDefault("name", "")),
-                String.valueOf(dimension.getOrDefault("criteria", "")),
-                String.valueOf(dimension.getOrDefault("description", "")));
-        return text.contains("系统交互");
+        return RubricScoringPolicy.MANUAL.equals(RubricScoringPolicy.method(dimension));
+    }
+
+    private List<Map<String, Object>> rubricDimensions(String json) throws Exception {
+        Map<String, Object> rubric = objectMapper.readValue(json, new TypeReference<>() {});
+        return objectMapper.convertValue(rubric.getOrDefault("dimensions", List.of()), new TypeReference<>() {});
+    }
+
+    private Map<String, Object> emptyScoringResult(String reason) {
+        return new LinkedHashMap<>(Map.of("model_name", "not-required", "model_source", "not_required", "total_score", BigDecimal.ZERO,
+                "dimension_scores", List.of(), "issues", List.of(), "file_analysis", List.of(), "report_markdown", reason, "token_usage", 0));
     }
 
     @SuppressWarnings("unchecked")
@@ -1273,6 +1295,9 @@ public class AiScoringService {
                 rubric.getOrDefault("dimensions", List.of()),
                 new TypeReference<List<Map<String, Object>>>() {
                 });
+        dimensions = dimensions.stream().filter(value -> RubricScoringPolicy.AVERAGE.equals(RubricScoringPolicy.method(value))).toList();
+        if (dimensions.isEmpty()) return emptyScoringResult("本次未配置 AI＋规则双路评分项，规则评分不参与计分。");
+        rubric.put("dimensions", dimensions);
         List<Map<String, Object>> scores = new ArrayList<>();
         List<Map<String, Object>> issues = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
@@ -1323,7 +1348,7 @@ public class AiScoringService {
         result.put("file_analysis", List.of());
         result.put("report_markdown", markdown);
         result.put("token_usage", 0);
-        validateResult(result, rubricJson);
+        validateResult(result, objectMapper.writeValueAsString(rubric));
         return result;
     }
 
@@ -1476,8 +1501,11 @@ public class AiScoringService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         boolean sourceComplete = SCORING_SUCCESS.equals(state.llmStatus()) && SCORING_SUCCESS.equals(state.keywordStatus());
         boolean complete = isCombinedComplete(state);
+        List<Map<String, Object>> sourceDimensions = rubricDimensions(sourceRubricJson(rubric.getRubricJson()));
+        List<Map<String, Object>> dimensionScores = mergedDimensionScores(state, manualDimensions, sourceDimensions);
         BigDecimal sourceAverage = sourceComplete
-                ? llmScore.add(keywordScore).divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)
+                ? dimensionScores.stream().filter(row -> row.containsKey("llm_score"))
+                    .map(row -> decimal(row.get("score"))).reduce(BigDecimal.ZERO, BigDecimal::add)
                 : null;
         BigDecimal finalScore = complete ? sourceAverage.add(aiProcessScore).min(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP) : null;
         Map<String, Object> scoreDetails = Map.of(
@@ -1507,7 +1535,6 @@ public class AiScoringService {
         report.setLlmResultJson(state.llmResult() == null ? null : objectMapper.writeValueAsString(state.llmResult()));
         report.setKeywordResultJson(state.keywordResult() == null ? null : objectMapper.writeValueAsString(state.keywordResult()));
         report.setAiProcessResultJson(state.aiProcessResult() == null ? null : objectMapper.writeValueAsString(state.aiProcessResult()));
-        Object dimensionScores = mergedDimensionScores(state, manualDimensions);
         report.setScoreJson(objectMapper.writeValueAsString(dimensionScores));
         report.setScoreDetailJson(objectMapper.writeValueAsString(dimensionScores));
         report.setFileAnalysisJson(objectMapper.writeValueAsString(state.llmResult() == null ? List.of() : state.llmResult().getOrDefault("file_analysis", List.of())));
@@ -1570,7 +1597,7 @@ public class AiScoringService {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Map<String, Object>> mergedDimensionScores(CombinedScoringState state, List<Map<String, Object>> manualDimensions) {
+    private List<Map<String, Object>> mergedDimensionScores(CombinedScoringState state, List<Map<String, Object>> manualDimensions, List<Map<String, Object>> sourceDimensions) {
         List<Map<String, Object>> merged = new ArrayList<>();
         List<Map<String, Object>> llmDimensions = dimensionList(state.llmResult());
         Map<String, Map<String, Object>> keywordByName = new LinkedHashMap<>();
@@ -1581,6 +1608,9 @@ public class AiScoringService {
         for (Map<String, Object> llmItem : llmDimensions) {
             String name = String.valueOf(llmItem.getOrDefault("name", "评分维度"));
             Map<String, Object> keywordItem = keywordByName.get(name);
+            String method = sourceDimensions.stream().filter(value -> name.equals(value.get("name")))
+                    .map(RubricScoringPolicy::method).findFirst().orElse(RubricScoringPolicy.AVERAGE);
+            if (!RubricScoringPolicy.AVERAGE.equals(method)) keywordItem = null;
             BigDecimal max = decimal(llmItem.getOrDefault("max_score", keywordItem == null ? 0 : keywordItem.get("max_score")));
             BigDecimal llmScore = decimal(llmItem.getOrDefault("score", 0));
             BigDecimal keywordScore = keywordItem == null ? BigDecimal.ZERO : decimal(keywordItem.getOrDefault("score", 0));
@@ -1593,7 +1623,8 @@ public class AiScoringService {
             row.put("max_score", max);
             row.put("llm_score", llmScore);
             row.put("rule_score", keywordItem == null ? null : keywordScore);
-            row.put("comment", "源码维度最终分 = 大模型评分与规则证据评分平均。");
+            row.put("scoring_method", method);
+            row.put("comment", RubricScoringPolicy.AI.equals(method) ? "本项仅由 AI 按评分标准给分。" : "本项得分为 AI 与规则评分的平均值。");
             merged.add(row);
             usedNames.add(name);
         }
@@ -1610,6 +1641,7 @@ public class AiScoringService {
         for (Map<String, Object> item : dimensionList(state.aiProcessResult())) {
             Map<String, Object> row = new LinkedHashMap<>(item);
             row.put("ai_process_score", decimal(item.getOrDefault("score", 0)));
+            row.put("scoring_method", RubricScoringPolicy.AI);
             row.putIfAbsent("comment", "AI过程性应用由学生提交的 AI 交互 JSON 单独评分。");
             merged.add(row);
         }
@@ -1620,6 +1652,7 @@ public class AiScoringService {
             row.put("score", BigDecimal.ZERO);
             row.put("max_score", max);
             row.put("manual_review_required", true);
+            row.put("scoring_method", RubricScoringPolicy.MANUAL);
             row.put("manual_review_status", "pending");
             row.put("comment", String.valueOf(dimension.getOrDefault(
                     "manual_review_reason",
@@ -1681,7 +1714,7 @@ public class AiScoringService {
                     .append(manualDimensions.stream().map(item -> String.valueOf(item.getOrDefault("name", "人工评分项"))).reduce((a, b) -> a + "、" + b).orElse("人工评分项"))
                     .append("，共 ").append(manualMax).append(" 分）\n");
         }
-        builder.append("- 源码维度平均分: ").append(sourceAverage == null ? "未生成（大模型和规则证据都成功后才生成）" : sourceAverage + " 分").append("\n");
+        builder.append("- 源码评分合计（双路项取平均，仅 AI 项直接计分）: ").append(sourceAverage == null ? "未生成（所需评分节点成功后生成）" : sourceAverage + " 分").append("\n");
         builder.append("- 自动评分合计: ").append(finalScore == null ? "未生成（关键评分节点都成功后才生成）" : finalScore + "/" + autoMax).append("\n");
         builder.append("- 最终总分: ").append(manualDimensions.isEmpty() ? (finalScore == null ? "未生成" : finalScore + "/100") : "待教师补齐人工评分后确认").append("\n\n");
         if (SCORING_FAILED.equals(state.llmStatus()) && hasText(state.llmError())) {
@@ -2142,10 +2175,11 @@ public class AiScoringService {
 
     /** 计算任务执行耗时（毫秒） */
     private long durationMs(TAiTask task) {
-        if (task.getStartTime() == null || task.getEndTime() == null) {
+        if (task.getStartTime() == null) {
             return 0;
         }
-        return java.time.Duration.between(task.getStartTime(), task.getEndTime()).toMillis();
+        LocalDateTime end = task.getEndTime() == null ? LocalDateTime.now() : task.getEndTime();
+        return Math.max(0, java.time.Duration.between(task.getStartTime(), end).toMillis());
     }
 
     /** 安全转换为 BigDecimal */

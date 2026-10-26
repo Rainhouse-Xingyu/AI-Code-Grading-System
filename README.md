@@ -95,6 +95,16 @@ python3 -m py_compile inference-service/app/main.py
 
 ## 主要 API
 
+评分模板继续使用原有 Word/Excel 格式，不需要老师增加列或重新分发文件。导入后按“维度 → 评分项 → 档位说明”展示，编号不同的同项区间会合并为一项满分；变量、循环等固定分值评分点仍独立累计。管理员可在页面选择 `ai_rule_average`（AI＋规则平均）、`ai_only`（仅 AI）或 `manual`（教师评分）。旧模板读取时提供兼容的合并视图，已有作业和历史报告的快照不自动重算。
+
+新页面默认“下发总任务，由老师按班发布”：管理员确定题目、目标班级和统一评分标准；普通老师选择负责班级及开始、截止时间，生成独立班级作业。总任务本身不向学生开放。班级作业继承发布时的评分标准快照，老师只可调整本班时间；管理员可查看各班发布进度。老师负责班级读取账号中的任课班级，未填写时兼容原班级字段，支持逗号、顿号分隔及 `软件26201-26203` 这样的连续编号范围，不做模糊班级匹配。
+
+新 API 字段 `teacherReleaseRequired=true` 表示总任务；旧客户端不传该字段时保留原来的直接发布行为，历史作业无需迁移为总任务。
+
+- `POST /api/v1/assignments/{id}/class-release` 老师按总任务发布本班作业，提交 `className`、可选 `startTime`、必填 `endTime`。
+- `PUT /api/v1/assignments/{id}/class-schedule` 调整自己发布的班级作业时间。
+- `GET /api/v1/assignments/{id}/class-releases` 查看权限范围内各班发布状态及提交数量。
+
 - `GET /api/v1/users/import-template` 下载学生导入模板。
 - `POST /api/v1/users/batch-import` 批量导入学生。
 - `GET/POST/PUT/PATCH/DELETE /api/v1/rubric-templates` 管理员维护全局评分模板，教师读取启用模板并在作业中勾选评分点。

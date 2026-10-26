@@ -11,6 +11,8 @@ import com.rainexis.backend.mapper.TRubricTemplateItemMapper;
 import com.rainexis.backend.mapper.TRubricTemplateMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.service.business.RubricParserService;
+import com.rainexis.backend.service.business.RubricTemplateStructureService;
+import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -37,15 +39,17 @@ public class RubricTemplateApiController {
     private final TRubricTemplateItemMapper itemMapper;
     private final RubricParserService rubricParserService;
     private final ObjectMapper objectMapper;
+    private final RubricTemplateStructureService structureService;
 
     public RubricTemplateApiController(TRubricTemplateMapper templateMapper,
                                        TRubricTemplateItemMapper itemMapper,
                                        RubricParserService rubricParserService,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper, RubricTemplateStructureService structureService) {
         this.templateMapper = templateMapper;
         this.itemMapper = itemMapper;
         this.rubricParserService = rubricParserService;
         this.objectMapper = objectMapper;
+        this.structureService = structureService;
     }
 
     @GetMapping
@@ -61,6 +65,7 @@ public class RubricTemplateApiController {
     }
 
     @PostMapping
+    @Transactional
     public ApiResponse<Map<String, Object>> create(@RequestBody TemplateRequest request) {
         AuthContext.requireAdmin();
         if (request.templateName() == null || request.templateName().isBlank()) {
@@ -80,6 +85,7 @@ public class RubricTemplateApiController {
     }
 
     @PostMapping("/upload")
+    @Transactional
     public ApiResponse<Map<String, Object>> upload(@RequestParam MultipartFile file,
                                                    @RequestParam(required = false) String templateName,
                                                    @RequestParam(defaultValue = "true") boolean enabled) {
@@ -95,6 +101,7 @@ public class RubricTemplateApiController {
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ApiResponse<Map<String, Object>> update(@PathVariable Long id, @RequestBody TemplateRequest request) {
         AuthContext.requireAdmin();
         TRubricTemplate template = requiredTemplate(id);
@@ -171,6 +178,9 @@ public class RubricTemplateApiController {
             record.setPointScore(item.pointScore());
             record.setPointRatio(item.pointScore().multiply(BigDecimal.valueOf(100)).divide(total, 4, RoundingMode.HALF_UP));
             record.setCriteria(item.criteria());
+            record.setScoringMethod(item.scoringMethod());
+            record.setScoreBandsJson(item.scoreBandsJson());
+            structureService.prepare(record);
             record.setEnabled(item.enabled() == null || item.enabled() ? (byte) 1 : (byte) 0);
             record.setCreatedAt(LocalDateTime.now());
             itemMapper.insert(record);
@@ -220,11 +230,14 @@ public class RubricTemplateApiController {
                                 firstText(item.path("name").asText(), dimensionName, "评分点"),
                                 pointScore,
                                 itemCriteria,
-                                true
+                                true, null,
+                                (item.has("scoring_bands") ? item.path("scoring_bands") : dimension.path("scoring_bands")).isArray()
+                                        ? (item.has("scoring_bands") ? item.path("scoring_bands") : dimension.path("scoring_bands")).toString() : null
                         ));
                     }
                 } else {
-                    items.add(new ItemRequest(dimensionOrder, dimensionName, 1, dimensionName, dimensionScore, dimensionCriteria, true));
+                    items.add(new ItemRequest(dimensionOrder, dimensionName, 1, dimensionName, dimensionScore, dimensionCriteria, true, null,
+                            dimension.path("scoring_bands").isArray() ? dimension.path("scoring_bands").toString() : null));
                 }
                 dimensionOrder++;
             }
@@ -261,11 +274,11 @@ public class RubricTemplateApiController {
     }
 
     private List<TRubricTemplateItem> templateItems(Long templateId) {
-        return itemMapper.selectList(new LambdaQueryWrapper<TRubricTemplateItem>()
+        return structureService.normalize(itemMapper.selectList(new LambdaQueryWrapper<TRubricTemplateItem>()
                 .eq(TRubricTemplateItem::getTemplateId, templateId)
                 .orderByAsc(TRubricTemplateItem::getDimensionOrder)
                 .orderByAsc(TRubricTemplateItem::getPointOrder)
-                .orderByAsc(TRubricTemplateItem::getId));
+                .orderByAsc(TRubricTemplateItem::getId)));
     }
 
     private String firstText(String first, String second, String fallback) {
@@ -285,6 +298,6 @@ public class RubricTemplateApiController {
     }
 
     public record ItemRequest(Integer dimensionOrder, String dimensionName, Integer pointOrder, String pointName,
-                              BigDecimal pointScore, String criteria, Boolean enabled) {
+                              BigDecimal pointScore, String criteria, Boolean enabled, String scoringMethod, String scoreBandsJson) {
     }
 }

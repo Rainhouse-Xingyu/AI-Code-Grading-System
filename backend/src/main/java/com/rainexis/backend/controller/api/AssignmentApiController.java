@@ -26,6 +26,8 @@ import com.rainexis.backend.service.business.AccessControlService;
 import com.rainexis.backend.service.business.AssignmentClassService;
 import com.rainexis.backend.service.business.AssignmentDownloadService;
 import com.rainexis.backend.service.business.RubricDimensionItemService;
+import com.rainexis.backend.service.business.RubricTemplateStructureService;
+import com.rainexis.backend.service.business.RubricScoringPolicy;
 import com.rainexis.backend.service.business.ScoreSheetExportService;
 import com.rainexis.backend.service.business.SemesterService;
 import com.rainexis.backend.service.business.SubmissionCleanupService;
@@ -52,6 +54,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
+import java.util.LinkedHashMap;
 
 /**
  * 作业管理 API 控制器
@@ -81,6 +86,7 @@ public class AssignmentApiController {
     private final SemesterService semesterService;
     private final SubmissionCleanupService submissionCleanupService;
     private final ObjectMapper objectMapper;
+    private final RubricTemplateStructureService templateStructureService;
 
     public AssignmentApiController(TAssignmentMapper assignmentMapper,
                                    TSubmissionMapper submissionMapper,
@@ -101,7 +107,7 @@ public class AssignmentApiController {
                                    ScoreSheetExportService scoreSheetExportService,
                                    SemesterService semesterService,
                                    SubmissionCleanupService submissionCleanupService,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper, RubricTemplateStructureService templateStructureService) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
@@ -122,6 +128,7 @@ public class AssignmentApiController {
         this.semesterService = semesterService;
         this.submissionCleanupService = submissionCleanupService;
         this.objectMapper = objectMapper;
+        this.templateStructureService = templateStructureService;
     }
 
     @GetMapping
@@ -136,6 +143,7 @@ public class AssignmentApiController {
                     .orderByDesc(TAssignment::getCreatedAt));
             return ApiResponse.ok(assignmentClassService.attachClassNames(assignments.stream()
                     .filter(assignment -> assignmentClassService.includesClass(assignment, current.className()))
+                    .filter(assignment -> !Boolean.TRUE.equals(assignment.getTeacherReleaseRequired()))
                     .filter(this::studentCanSeeAssignment)
                     .toList()));
         }
@@ -145,14 +153,22 @@ public class AssignmentApiController {
         if (!"admin".equals(current.role())) {
             assignments = assignments.stream()
                     .filter(assignment -> "published".equals(assignment.getStatus()))
-                    .filter(assignment -> assignmentClassService.includesClass(assignment, current.className()))
+                    .filter(assignment -> assignmentClassService.teacherCanAccess(assignment, current))
                     .toList();
+        }
+        for (var assignment : assignments) {
+            if (Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) {
+                List<String> used = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, assignment.getId()))
+                        .stream().map(TAssignment::getClassName).toList();
+                assignment.setReleasableClassNames(assignmentClassService.visibleClassNames(assignment, current).stream().filter(name -> !used.contains(name)).toList());
+            }
         }
         return ApiResponse.ok(assignmentClassService.attachClassNames(assignments));
     }
 
     /** 创建作业 */
     @PostMapping
+    @Transactional
     public ApiResponse<TAssignment> create(@RequestBody AssignmentRequest request) {
         AuthContext.requireAdmin();
         if (request.title() == null || request.title().isBlank()) {
@@ -170,6 +186,7 @@ public class AssignmentApiController {
         assignment.setClassName(String.join(",", classNames));
         assignment.setTeacherId(AuthContext.get().id());
         assignment.setSemesterId(semesterService.current().getId());
+        assignment.setTeacherReleaseRequired(Boolean.TRUE.equals(request.teacherReleaseRequired()));
         assignment.setStartTime(request.startTime());
         assignment.setEndTime(request.endTime());
         assignment.setLatePolicy(latePolicy(request.latePolicy()));
@@ -187,6 +204,7 @@ public class AssignmentApiController {
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ApiResponse<TAssignment> update(@PathVariable Long id, @RequestBody AssignmentRequest request) {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
@@ -209,6 +227,7 @@ public class AssignmentApiController {
             throw BusinessException.badRequest("请选择至少一个发布班级");
         }
         assignment.setTitle(request.title());
+        assignment.setTeacherReleaseRequired(Boolean.TRUE.equals(request.teacherReleaseRequired()));
         assignment.setCourseName(cleanText(request.courseName()));
         assignment.setDescription(request.description());
         assignment.setLanguage(request.language());
@@ -251,6 +270,9 @@ public class AssignmentApiController {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         semesterService.requireActive(assignment.getSemesterId());
+        if (assignmentMapper.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id)) > 0) {
+            throw BusinessException.conflict("总任务已有班级作业，请先处理班级作业后再删除总任务");
+        }
         long activeTaskCount = taskMapper.selectCount(new LambdaQueryWrapper<com.rainexis.backend.entity.TAiTask>()
                 .eq(com.rainexis.backend.entity.TAiTask::getAssignmentId, id)
                 .in(com.rainexis.backend.entity.TAiTask::getStatus, "pending", "running"));
@@ -302,8 +324,12 @@ public class AssignmentApiController {
             studentQuery.eq(TUser::getId, -1);
         }
         long studentTotal = userMapper.selectCount(studentQuery);
+        List<Long> statisticsAssignmentIds = Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())
+                ? assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id)).stream()
+                    .filter(value -> assignmentClassService.teacherCanAccess(value, AuthContext.get())).map(TAssignment::getId).toList()
+                : List.of(id);
         List<TSubmission> currentSubmissions = submissionMapper.selectList(new LambdaQueryWrapper<TSubmission>()
-                .eq(TSubmission::getAssignmentId, id)
+                .in(TSubmission::getAssignmentId, statisticsAssignmentIds.isEmpty() ? List.of(-1L) : statisticsAssignmentIds)
                 .eq(TSubmission::getCurrent, true))
                 .stream()
                 .filter(accessControlService::canTeacherAccessSubmission)
@@ -431,6 +457,7 @@ public class AssignmentApiController {
     }
 
     private boolean studentCanSeeAssignment(TAssignment assignment) {
+        if (assignment.getStartTime() != null && LocalDateTime.now().isBefore(assignment.getStartTime())) return false;
         if (assignment.getEndTime() == null || !LocalDateTime.now().isAfter(assignment.getEndTime())) {
             return true;
         }
@@ -463,15 +490,16 @@ public class AssignmentApiController {
         if (request.rubricTemplateId() == null || request.selectedRubricItemIds() == null || request.selectedRubricItemIds().isEmpty()) {
             throw BusinessException.badRequest("请选择评分模板和至少一个评分点");
         }
-        List<TRubricTemplateItem> selected = templateItemMapper.selectList(new LambdaQueryWrapper<TRubricTemplateItem>()
+        List<TRubricTemplateItem> available = templateItemMapper.selectList(new LambdaQueryWrapper<TRubricTemplateItem>()
                 .eq(TRubricTemplateItem::getTemplateId, request.rubricTemplateId())
-                .in(TRubricTemplateItem::getId, request.selectedRubricItemIds())
                 .eq(TRubricTemplateItem::getEnabled, (byte) 1)
                 .orderByAsc(TRubricTemplateItem::getDimensionOrder)
                 .orderByAsc(TRubricTemplateItem::getPointOrder));
-        if (selected.size() != request.selectedRubricItemIds().size()) {
+        if (request.selectedRubricItemIds().stream().anyMatch(id -> available.stream().noneMatch(item -> item.getId().equals(id)))) {
             throw BusinessException.badRequest("评分模板中存在无效或停用的评分点");
         }
+        List<TRubricTemplateItem> selected = templateStructureService.normalize(available).stream()
+                .filter(item -> item.getLegacyItemIds().stream().anyMatch(request.selectedRubricItemIds()::contains)).toList();
         try {
             assignment.setRubricTemplateId(request.rubricTemplateId());
             assignment.setSelectedRubricItemIds(objectMapper.writeValueAsString(request.selectedRubricItemIds()));
@@ -530,12 +558,27 @@ public class AssignmentApiController {
                     ? BigDecimal.valueOf(100).subtract(normalizedSum)
                     : item.getPointScore().multiply(BigDecimal.valueOf(100)).divide(total, 2, RoundingMode.HALF_UP);
             normalizedSum = normalizedSum.add(maxScore);
+            TRubricTemplateItem normalizedItem = new TRubricTemplateItem();
+            org.springframework.beans.BeanUtils.copyProperties(item, normalizedItem);
+            List<Map<String, Object>> scaledBands = new ArrayList<>();
+            for (var original : templateStructureService.bands(item)) {
+                Map<String, Object> band = new LinkedHashMap<>(original);
+                for (String key : List.of("score_min", "score_max")) band.put(key, new BigDecimal(String.valueOf(original.get(key)))
+                        .multiply(maxScore).divide(item.getPointScore(), 2, RoundingMode.HALF_UP));
+                scaledBands.add(band);
+            }
+            normalizedItem.setPointScore(maxScore);
+            try { normalizedItem.setScoreBandsJson(objectMapper.writeValueAsString(scaledBands)); }
+            catch (Exception ex) { throw BusinessException.badRequest("评分档位归一化失败"); }
+            templateStructureService.prepare(normalizedItem);
             Map<String, Object> dimension = new LinkedHashMap<>();
             dimension.put("name", item.getDimensionName() + " - " + item.getPointName());
             dimension.put("original_score", item.getPointScore());
             dimension.put("weight", maxScore);
             dimension.put("max_score", maxScore);
-            dimension.put("criteria", item.getCriteria());
+            dimension.put("criteria", normalizedItem.getCriteria());
+            dimension.put("scoring_method", item.getScoringMethod());
+            dimension.put("scoring_bands", scaledBands);
             if (isManualReviewItem(item)) {
                 dimension.put("manual_review_required", true);
                 dimension.put("manual_review_reason", "系统交互性需要教师结合运行输入输出效果手动评分。");
@@ -544,7 +587,7 @@ public class AssignmentApiController {
                     "name", item.getPointName(),
                     "original_score", item.getPointScore(),
                     "max_score", maxScore,
-                    "criteria", item.getCriteria() == null ? "" : item.getCriteria()
+                    "criteria", normalizedItem.getCriteria() == null ? "" : normalizedItem.getCriteria()
             )));
             dimensions.add(dimension);
         }
@@ -557,16 +600,96 @@ public class AssignmentApiController {
     }
 
     private boolean isManualReviewItem(TRubricTemplateItem item) {
-        String text = String.join(" ",
-                item.getDimensionName() == null ? "" : item.getDimensionName(),
-                item.getPointName() == null ? "" : item.getPointName(),
-                item.getCriteria() == null ? "" : item.getCriteria());
-        return text.contains("系统交互");
+        return RubricScoringPolicy.MANUAL.equals(item.getScoringMethod());
     }
 
     public record AssignmentRequest(String title, String courseName, String description, String language, String className, List<String> classNames,
                                     LocalDateTime startTime,
                                     LocalDateTime endTime, String latePolicy, Integer latePenaltyPercent, boolean published,
-                                    Long rubricTemplateId, List<Long> selectedRubricItemIds) {
+                                    Long rubricTemplateId, List<Long> selectedRubricItemIds, Boolean teacherReleaseRequired) {
     }
+
+    @PostMapping("/{id}/class-release")
+    @Transactional
+    public ApiResponse<TAssignment> releaseClass(@PathVariable Long id, @RequestBody ClassReleaseRequest request) {
+        TAssignment master = accessControlService.requireAssignmentAccess(id);
+        semesterService.requireActive(master.getSemesterId());
+        if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired()) || master.getParentAssignmentId() != null || !"published".equals(master.getStatus())) {
+            throw BusinessException.badRequest("只能从已下发的总任务发布班级作业");
+        }
+        if (request == null || !assignmentClassService.visibleClassNames(master, AuthContext.get()).contains(request.className())) {
+            throw BusinessException.forbidden("只能发布总任务范围内自己负责的班级");
+        }
+        validateSchedule(request.startTime(), request.endTime());
+        TAssignment child = new TAssignment();
+        child.setTitle(master.getTitle());
+        child.setCourseName(master.getCourseName());
+        child.setDescription(master.getDescription());
+        child.setLanguage(master.getLanguage());
+        child.setParentAssignmentId(master.getId());
+        child.setTeacherReleaseRequired(false);
+        child.setClassName(request.className());
+        child.setTeacherId(AuthContext.get().id());
+        child.setSemesterId(master.getSemesterId());
+        child.setStartTime(request.startTime());
+        child.setEndTime(request.endTime());
+        child.setLatePolicy(master.getLatePolicy());
+        child.setLatePenaltyPercent(master.getLatePenaltyPercent());
+        child.setRubricTemplateId(master.getRubricTemplateId());
+        child.setSelectedRubricItemIds(master.getSelectedRubricItemIds());
+        child.setNormalizedRubricJson(master.getNormalizedRubricJson());
+        child.setStatus("published");
+        child.setCreatedAt(LocalDateTime.now());
+        try { assignmentMapper.insert(child); }
+        catch (DuplicateKeyException ex) { throw BusinessException.conflict("这个班级已经发布过该任务，请刷新查看"); }
+        assignmentClassService.replaceClasses(child.getId(), List.of(request.className()));
+        dimensionItemService.copyAssignmentTemplateItems(master.getId(), child.getId());
+        return ApiResponse.ok(assignmentClassService.attachClassNames(child));
+    }
+
+    @PutMapping("/{id}/class-schedule")
+    public ApiResponse<TAssignment> updateClassSchedule(@PathVariable Long id, @RequestBody ClassReleaseRequest request) {
+        TAssignment child = accessControlService.requireAssignmentAccess(id);
+        semesterService.requireActive(child.getSemesterId());
+        if (child.getParentAssignmentId() == null || (!AuthContext.get().isAdmin() && !AuthContext.get().id().equals(child.getTeacherId()))) {
+            throw BusinessException.forbidden("只能调整自己发布的班级作业时间");
+        }
+        if (request == null) throw BusinessException.badRequest("请填写本班作业时间");
+        validateSchedule(request.startTime(), request.endTime());
+        child.setStartTime(request.startTime());
+        child.setEndTime(request.endTime());
+        assignmentMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TAssignment>()
+                .eq(TAssignment::getId, id).set(TAssignment::getStartTime, request.startTime()).set(TAssignment::getEndTime, request.endTime()));
+        return ApiResponse.ok(assignmentClassService.attachClassNames(child));
+    }
+
+    @GetMapping("/{id}/class-releases")
+    public ApiResponse<List<Map<String, Object>>> classReleases(@PathVariable Long id) {
+        TAssignment master = accessControlService.requireAssignmentAccess(id);
+        List<TAssignment> children = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (String name : assignmentClassService.visibleClassNames(master, AuthContext.get())) {
+            TAssignment child = children.stream().filter(value -> name.equals(value.getClassName())).findFirst().orElse(null);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("className", name);
+            row.put("status", child == null ? "pending" : "published");
+            row.put("assignmentId", child == null ? null : child.getId());
+            row.put("startTime", child == null ? null : child.getStartTime());
+            row.put("endTime", child == null ? null : child.getEndTime());
+            var teacher = child == null ? null : userMapper.selectById(child.getTeacherId());
+            row.put("teacherName", teacher == null ? "" : teacher.getRealName());
+            row.put("submitted", child == null ? 0 : submissionMapper.selectCount(new LambdaQueryWrapper<TSubmission>()
+                    .eq(TSubmission::getAssignmentId, child.getId()).eq(TSubmission::getCurrent, true)));
+            rows.add(row);
+        }
+        return ApiResponse.ok(rows);
+    }
+
+    private void validateSchedule(LocalDateTime start, LocalDateTime end) {
+        if (end == null || !end.isAfter(start == null ? LocalDateTime.now() : start)) {
+            throw BusinessException.badRequest("截止时间必须晚于开始时间；立即发布时必须晚于当前时间");
+        }
+    }
+
+    public record ClassReleaseRequest(String className, LocalDateTime startTime, LocalDateTime endTime) {}
 }

@@ -24,3 +24,6 @@ coverage/
 uploads/
 tmp/
 temp/
+
+# 本地运行环境配置
+runtime.env

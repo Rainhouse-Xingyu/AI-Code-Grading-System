@@ -43,6 +43,15 @@ public class TRubricTemplateItem implements Serializable {
     @TableField("criteria")
     private String criteria;
 
+    @TableField("scoring_method")
+    private String scoringMethod;
+
+    @TableField("score_bands_json")
+    private String scoreBandsJson;
+
+    @TableField(exist = false)
+    private java.util.List<Long> legacyItemIds;
+
     @TableField("enabled")
     private Byte enabled;
 

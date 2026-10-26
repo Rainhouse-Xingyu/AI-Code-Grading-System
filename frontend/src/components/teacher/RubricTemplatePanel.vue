@@ -113,50 +113,41 @@
               </div>
             </div>
             <div class="template-item-table-wrap">
-              <el-table :data="templateForm.items" size="small" class="template-item-table">
-                <el-table-column label="维度" min-width="130">
-                  <template #default="{ row }">
-                    <el-input v-model="row.dimensionName" size="small" placeholder="评分维度" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="序号" width="110">
-                  <template #default="{ row }">
-                    <el-input-number v-model="row.dimensionOrder" :min="1" size="small" controls-position="right" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="评分点" min-width="140">
-                  <template #default="{ row }">
-                    <el-input v-model="row.pointName" size="small" placeholder="评分点名称" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="分数" width="96">
-                  <template #default="{ row }">
-                    <el-input-number v-model="row.pointScore" :min="0.1" :precision="1" size="small" controls-position="right" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="标准" min-width="180">
-                  <template #default="{ row }">
-                    <el-input v-model="row.criteria" size="small" placeholder="描述得分标准" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="启用" width="86" align="center">
-                  <template #default="{ row }">
-                    <div class="template-item-switch-cell">
-                      <el-switch v-model="row.enabled" size="small" />
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="64" align="right">
-                  <template #default="{ $index }">
-                    <el-button link type="danger" @click="$emit('remove-template-item', $index)">删除</el-button>
-                  </template>
-                </el-table-column>
-                <template #empty>
-                  <el-empty class="empty-panel template-items-empty" description="还没有评分点">
-                    <el-button type="primary" plain @click="$emit('add-template-item')">添加第一个评分点</el-button>
-                  </el-empty>
-                </template>
-              </el-table>
+              <el-alert title="模板文件格式不变。评分点分别计分；档位只是同一评分点的标准，不重复累计满分。" type="info" :closable="false" />
+              <el-collapse>
+              <el-collapse-item v-for="group in templateGroups" :key="group.name" :name="group.name" :title="`${group.name} · ${group.items.length} 个评分点 · 满分 ${formatScore(group.total)} 分`">
+              <el-collapse class="rubric-point-tree">
+                <el-collapse-item v-for="row in group.items" :key="templateForm.items.indexOf(row)" :title="`${row.pointName || '未命名评分点'} · ${row.pointScore} 分 · ${scoringMethodLabel(row.scoringMethod)}`">
+                  <div class="rubric-point-card">
+                    <el-form label-position="top" class="rubric-point-fields">
+                      <el-form-item label="所属维度"><el-input :model-value="row.dimensionName" @change="row.dimensionName = $event" /></el-form-item>
+                      <el-form-item label="评分点"><el-input v-model="row.pointName" /></el-form-item>
+                      <el-form-item label="满分"><el-input-number v-model="row.pointScore" :min="0.1" :precision="2" controls-position="right" /></el-form-item>
+                      <el-form-item label="评分方式">
+                        <el-select v-model="row.scoringMethod" placeholder="自动识别">
+                          <el-option label="AI＋规则取平均" value="ai_rule_average" :disabled="`${row.dimensionName} ${row.pointName}`.includes('过程性应用')" />
+                          <el-option label="仅 AI 评分" value="ai_only" />
+                          <el-option label="教师评分" value="manual" />
+                        </el-select>
+                      </el-form-item>
+                      <el-form-item label="显示顺序"><el-input-number v-model="row.dimensionOrder" :min="1" controls-position="right" /></el-form-item>
+                    </el-form>
+                    <div class="rubric-point-actions"><el-switch v-model="row.enabled" active-text="启用评分点" /><el-button link type="danger" @click="$emit('remove-template-item', templateForm.items.indexOf(row))">删除评分点</el-button></div>
+                    <el-input v-if="!row.scoreBands?.length" v-model="row.criteria" type="textarea" :rows="3" placeholder="描述得分标准" />
+                    <details v-else class="rubric-bands">
+                      <summary>{{ row.scoreBands.length }} 个评分档位（展开查看，不单独计分）</summary>
+                      <div v-for="(band, index) in row.scoreBands" :key="index" class="rubric-band-row">
+                        <div class="rubric-band-range"><el-input-number v-model="band.score_min" :min="0" :max="row.pointScore" controls-position="right" size="small" /><span>～</span><el-input-number v-model="band.score_max" :min="0" :max="row.pointScore" controls-position="right" size="small" /><span>分</span></div>
+                        <el-input v-model="band.criteria" type="textarea" :rows="3" placeholder="这一档次的标准" />
+                        <el-button link type="danger" @click="removeBand(row, index)">删除档位</el-button>
+                      </div>
+                    </details>
+                    <el-button class="rubric-add-band" size="small" @click="addBand(row)">添加档位说明</el-button>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+              </el-collapse-item>
+              </el-collapse>
             </div>
           </section>
         </div>
@@ -168,6 +159,7 @@
 <script setup>
 import { computed } from "vue";
 import MetricCard from "../MetricCard.vue";
+import { scoringMethodLabel } from "../../JS/rubric.js";
 
 const rubricTemplateDownloadUrl = `${import.meta.env.BASE_URL}rubric-templates/评分模板.xlsx`;
 
@@ -204,6 +196,27 @@ function isEnabled(value) {
   return value === true || value === 1;
 }
 
+const templateGroups = computed(() => {
+  const groups = new Map();
+  for (const item of props.templateForm.items || []) {
+    const name = item.dimensionName || "未命名维度";
+    if (!groups.has(name)) groups.set(name, { name, items: [], total: 0 });
+    groups.get(name).items.push(item);
+    groups.get(name).total += Number(item.pointScore || 0);
+  }
+  return [...groups.values()];
+});
+
+function addBand(row) {
+  row.scoreBands ||= [];
+  row.scoreBands.push({ score_min: 0, score_max: Number(row.pointScore), criteria: "" });
+}
+
+function removeBand(row, index) {
+  row.scoreBands.splice(index, 1);
+  if (!row.scoreBands.length) row.criteria = (row.criteria || "").split("评分档位")[0].trim();
+}
+
 function formatScore(value) {
   return Number.isInteger(value) ? value : value.toFixed(1);
 }
@@ -213,3 +226,16 @@ function templateRowClassName({ row }) {
   return String(row.id) === String(props.templateForm.id) ? "is-selected-template" : "";
 }
 </script>
+
+<style scoped>
+.rubric-point-tree { padding-left: 14px; }
+.rubric-point-card { padding: 8px 12px 16px; }
+.rubric-point-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 0 14px; }
+.rubric-point-fields :deep(.el-input-number) { width: 100%; }
+.rubric-point-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.rubric-bands summary { cursor: pointer; color: #3555b5; padding: 12px 0; }
+.rubric-band-row { padding: 12px; margin: 8px 0; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.rubric-band-range { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rubric-band-range :deep(.el-input-number) { width: 104px; }
+.rubric-add-band { margin-top: 12px; }
+</style>

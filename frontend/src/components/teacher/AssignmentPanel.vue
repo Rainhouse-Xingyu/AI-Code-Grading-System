@@ -4,7 +4,7 @@
       <div class="module-intro-copy">
         <span class="module-kicker">教学内容</span>
         <h3>作业管理</h3>
-        <p>创建课程作业、配置评分规则，并跟踪每个作业的提交与发布进度。</p>
+        <p>{{ isAdmin ? '下发统一总任务和评分标准，查看各班发布进度。' : '根据本班进度发布总任务，各班时间和学生成绩独立管理。' }}</p>
       </div>
       <div class="module-summary-grid assignment-overview-grid" aria-label="作业概览">
         <MetricCard label="全部作业" :value="assignmentOverview.total" />
@@ -37,6 +37,10 @@
             show-icon
           />
           <section class="assignment-form-section">
+            <el-form-item label="发布方式">
+              <el-switch v-model="assignmentForm.teacherReleaseRequired" :disabled="isPublishedAssignment" active-text="下发总任务，由老师按班发布" inactive-text="直接发布（兼容原流程）" />
+            </el-form-item>
+            <el-alert v-if="assignmentForm.teacherReleaseRequired" title="下发后学生不会直接看到总任务。任课老师选择自己负责的班级和时间后，学生才能看到对应班级作业。" type="info" :closable="false" />
             <div class="form-section-heading">
               <strong>基本信息</strong>
               <span>用于学生识别作业及所属课程</span>
@@ -83,7 +87,7 @@
           <section class="assignment-form-section">
             <div class="form-section-heading">
               <strong>提交规则</strong>
-              <span>设置截止时间与迟交处理方式</span>
+              <span>{{ assignmentForm.teacherReleaseRequired ? '总任务时间供参考，各班实际时间由任课老师设置' : '设置截止时间与迟交处理方式' }}</span>
             </div>
             <div class="assignment-field-grid assignment-rule-fields">
               <el-form-item label="截止时间" class="assignment-deadline-field">
@@ -155,12 +159,12 @@
               <template v-if="editingAssignmentId">
                 <el-button type="primary" native-type="submit">保存修改</el-button>
                 <el-button v-if="selectedAssignmentRecord?.status === 'draft'" type="success" @click="$emit('publish-assignment')">
-                  发布作业
+                  {{ assignmentForm.teacherReleaseRequired ? '下发总任务' : '发布作业' }}
                 </el-button>
                 <el-button @click="$emit('reset-assignment-form')">取消编辑</el-button>
               </template>
               <template v-else>
-                <el-button type="primary" @click="$emit('create-assignment', true)">创建并发布</el-button>
+                <el-button type="primary" @click="$emit('create-assignment', true)">{{ assignmentForm.teacherReleaseRequired ? '创建并下发总任务' : '创建并发布' }}</el-button>
                 <el-button @click="$emit('create-assignment', false)">保存为草稿</el-button>
                 <el-button text @click="$emit('reset-assignment-form')">清空表单</el-button>
               </template>
@@ -209,6 +213,9 @@
             @current-change="$emit('select-assignment', $event)"
           >
             <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+            <el-table-column label="类型" width="110">
+              <template #default="{ row }"><el-tag effect="plain">{{ row.teacherReleaseRequired ? '总任务' : row.parentAssignmentId ? '班级作业' : '原流程作业' }}</el-tag></template>
+            </el-table-column>
             <el-table-column prop="courseName" label="课程" min-width="130" show-overflow-tooltip />
             <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
             <el-table-column label="班级" min-width="130" show-overflow-tooltip>
@@ -223,10 +230,13 @@
                 <el-tag :type="assignmentStatusType(row.status)" size="small">{{ assignmentStatusText(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column v-if="isAdmin" label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="220" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click.stop="$emit('select-assignment', row)">修改</el-button>
-                <el-button link type="danger" @click.stop="$emit('delete-assignment', row)">
+                <el-button v-if="row.teacherReleaseRequired && row.status === 'published'" link type="primary" @click.stop="$emit('view-class-releases', row)">班级发布进度</el-button>
+                <el-button v-if="!isAdmin && row.teacherReleaseRequired && row.releasableClassNames?.length" link type="success" @click.stop="$emit('release-class', row)">发布到本班</el-button>
+                <el-button v-if="row.parentAssignmentId" link type="primary" @click.stop="$emit('release-class', row)">调整时间</el-button>
+                <el-button v-if="isAdmin && !row.parentAssignmentId" link type="primary" @click.stop="$emit('select-assignment', row)">修改</el-button>
+                <el-button v-if="isAdmin" link type="danger" @click.stop="$emit('delete-assignment', row)">
                   {{ row.status === "draft" ? "删除草稿" : "删除作业" }}
                 </el-button>
               </template>
@@ -271,6 +281,7 @@
           :disabled="item.enabled === 0 || item.enabled === false"
         >
           <span>{{ cleanPointName(item) }}</span>
+          <el-tag size="small" effect="plain">{{ scoringMethodLabel(item.scoringMethod) }}</el-tag>
         </el-checkbox>
       </el-checkbox-group>
       <el-empty v-else class="empty-panel rubric-dialog-empty" description="该模板还没有可选评分点" />
@@ -286,6 +297,7 @@
 <script setup>
 import { computed, ref } from "vue";
 import MetricCard from "../MetricCard.vue";
+import { scoringMethodLabel } from "../../JS/rubric.js";
 
 const props = defineProps({
   isAdmin: { type: Boolean, required: true },
@@ -301,6 +313,8 @@ const props = defineProps({
 });
 
 defineEmits([
+  "release-class",
+  "view-class-releases",
   "save-assignment",
   "create-assignment",
   "publish-assignment",

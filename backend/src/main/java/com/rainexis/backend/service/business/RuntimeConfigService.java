@@ -60,6 +60,7 @@ public class RuntimeConfigService {
             "REDIS_HOST",
             "REDIS_PORT",
             "REDIS_PASSWORD",
+            "AI_REDIS_QUEUE",
             AI_WORKER_CONCURRENCY
     );
     private static final Set<String> SECRET_KEYS = Set.of(

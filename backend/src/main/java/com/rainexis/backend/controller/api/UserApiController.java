@@ -55,6 +55,7 @@ public class UserApiController {
     private final SemesterService semesterService;
     private final SubmissionCleanupService submissionCleanupService;
     private final TSubmissionMapper submissionMapper;
+    private final com.rainexis.backend.service.business.TeacherClassService teacherClassService;
 
     public UserApiController(TUserMapper userMapper,
                              PasswordService passwordService,
@@ -62,7 +63,7 @@ public class UserApiController {
                              SensitiveDataService sensitiveDataService,
                              SemesterService semesterService,
                              SubmissionCleanupService submissionCleanupService,
-                             TSubmissionMapper submissionMapper) {
+                             TSubmissionMapper submissionMapper, com.rainexis.backend.service.business.TeacherClassService teacherClassService) {
         this.userMapper = userMapper;
         this.passwordService = passwordService;
         this.accessControlService = accessControlService;
@@ -70,6 +71,7 @@ public class UserApiController {
         this.semesterService = semesterService;
         this.submissionCleanupService = submissionCleanupService;
         this.submissionMapper = submissionMapper;
+        this.teacherClassService = teacherClassService;
     }
 
     /** 获取当前登录用户的个人信息 */
@@ -180,9 +182,7 @@ public class UserApiController {
                 TUser student = new TUser();
                 student.setUsername(username);
                 student.setRealName(realName);
-                String teacherClassName = AuthContext.get().className();
-                if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()
-                        && !teacherClassName.equals(importedClassName)) {
+                if (!AuthContext.get().isAdmin() && !teacherClassService.manages(AuthContext.get(), importedClassName)) {
                     throw BusinessException.forbidden("只能导入自己班级的学生");
                 }
                 student.setClassName(importedClassName);
@@ -262,12 +262,14 @@ public class UserApiController {
         }
         LambdaQueryWrapper<TUser> query = new LambdaQueryWrapper<TUser>().eq(TUser::getRole, "student");
         query.in(TUser::getId, enrolledIds);
-        String teacherClassName = AuthContext.get().className();
-        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
-            if (className != null && !className.isBlank() && !teacherClassName.equals(className)) {
+        if (!AuthContext.get().isAdmin()) {
+            List<String> managed = teacherClassService.managedClasses(AuthContext.get());
+            if (className != null && !className.isBlank() && !managed.contains(className)) {
                 throw BusinessException.forbidden("只能查看自己班级的学生");
             }
-            query.eq(TUser::getClassName, teacherClassName);
+            if (managed.isEmpty()) query.eq(TUser::getId, -1);
+            else query.in(TUser::getClassName, managed);
+            if (className != null && !className.isBlank()) query.eq(TUser::getClassName, className);
         } else if (className != null && !className.isBlank()) {
             query.eq(TUser::getClassName, className);
         }
@@ -364,9 +366,10 @@ public class UserApiController {
         if (request != null && request.studentIds() != null && !request.studentIds().isEmpty()) {
             query.in(TUser::getId, request.studentIds());
         }
-        String teacherClassName = AuthContext.get().className();
-        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
-            query.eq(TUser::getClassName, teacherClassName);
+        if (!AuthContext.get().isAdmin()) {
+            List<String> managed = teacherClassService.managedClasses(AuthContext.get());
+            if (managed.isEmpty()) query.eq(TUser::getId, -1);
+            else query.in(TUser::getClassName, managed);
         }
         List<TUser> students = userMapper.selectList(query);
         for (TUser student : students) {
@@ -411,13 +414,14 @@ public class UserApiController {
     }
 
     private String studentClassName(String requestedClassName) {
-        String teacherClassName = AuthContext.get().className();
         String className = clean(requestedClassName);
-        if (!AuthContext.get().isAdmin() && teacherClassName != null && !teacherClassName.isBlank()) {
-            if (className != null && !teacherClassName.equals(className)) {
+        if (!AuthContext.get().isAdmin()) {
+            List<String> managed = teacherClassService.managedClasses(AuthContext.get());
+            if (className == null && managed.size() == 1) className = managed.get(0);
+            if (!managed.contains(className)) {
                 throw BusinessException.forbidden("只能新增自己班级的学生");
             }
-            return teacherClassName;
+            return className;
         }
         if (className == null) {
             throw BusinessException.badRequest("班级不能为空");

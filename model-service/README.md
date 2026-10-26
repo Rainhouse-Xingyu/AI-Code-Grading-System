@@ -11,6 +11,17 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+模型服务与后端共用项目根目录 `.env`。使用自定义配置文件时，两端均设置相同的绝对路径：
+
+```bash
+export APP_ENV_FILE="/absolute/path/to/runtime.env"
+uvicorn app.main:app --port 8000
+```
+
+配置文件中的非空值优先于启动环境变量；空的超时、Token 上限等配置会使用环境值或内置默认值，不会因空字符串启动失败。API Key 和本地模型地址可以通过显式空值清除。
+
+每次评分及 `/health` 都会读取最新的模型配置。修改 Key、模型名、接口地址、远程开关、超时或 Token 上限后，对下一次评分生效；执行中的请求保持开始时的配置快照。并发数、队列、Redis 连接及回调地址属于进程配置，修改后仍需重启模型服务。`/health` 只显示 Key 是否存在，不返回密钥。
+
 ## Environment
 
 - `AI_ENABLE_REMOTE=true` enables DeepSeek calls.

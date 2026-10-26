@@ -10,6 +10,7 @@ import com.rainexis.backend.mapper.TUserMapper;
 import com.rainexis.backend.security.AuthContext;
 import com.rainexis.backend.security.AuthUser;
 import org.springframework.stereotype.Service;
+import java.time.LocalDateTime;
 
 /**
  * 访问权限控制服务
@@ -24,17 +25,19 @@ public class AccessControlService {
     private final TUserMapper userMapper;
     private final AssignmentClassService assignmentClassService;
     private final SemesterService semesterService;
+    private final TeacherClassService teacherClassService;
 
     public AccessControlService(TAssignmentMapper assignmentMapper,
                                 TSubmissionMapper submissionMapper,
                                 TUserMapper userMapper,
                                 AssignmentClassService assignmentClassService,
-                                SemesterService semesterService) {
+                                SemesterService semesterService, TeacherClassService teacherClassService) {
         this.assignmentMapper = assignmentMapper;
         this.submissionMapper = submissionMapper;
         this.userMapper = userMapper;
         this.assignmentClassService = assignmentClassService;
         this.semesterService = semesterService;
+        this.teacherClassService = teacherClassService;
     }
 
     /** 校验当前用户是管理员且是作业发布管理者。普通教师不能创建、编辑、发布作业。 */
@@ -56,7 +59,10 @@ public class AccessControlService {
             throw BusinessException.notFound("作业不存在");
         }
         AuthUser current = AuthContext.get();
-        if (!current.isAdmin() && !assignmentClassService.includesClass(assignment, current.className())) {
+        if (!current.isAdmin() && Boolean.TRUE.equals(assignment.getTeacherReleaseRequired()) && !"published".equals(assignment.getStatus())) {
+            throw BusinessException.forbidden("总任务尚未下发");
+        }
+        if (!assignmentClassService.teacherCanAccess(assignment, current)) {
             throw BusinessException.forbidden("只能访问本班作业");
         }
         assignmentClassService.attachClassNames(assignment);
@@ -67,10 +73,13 @@ public class AccessControlService {
     public TAssignment requireStudentCanViewAssignment(Long assignmentId) {
         AuthContext.requireStudent();
         TAssignment assignment = assignmentMapper.selectById(assignmentId);
-        if (assignment == null || !"published".equals(assignment.getStatus())) {
+        if (assignment == null || !"published".equals(assignment.getStatus()) || Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) {
             throw BusinessException.notFound("作业不存在或未发布");
         }
         semesterService.requireActive(assignment.getSemesterId());
+        if (assignment.getStartTime() != null && LocalDateTime.now().isBefore(assignment.getStartTime())) {
+            throw BusinessException.conflict("尚未到本班作业开始时间");
+        }
         if (!assignmentClassService.includesClass(assignment, AuthContext.get().className())) {
             throw BusinessException.forbidden("只能查看本班作业");
         }
@@ -106,11 +115,11 @@ public class AccessControlService {
             return true;
         }
         TAssignment assignment = assignmentMapper.selectById(submission.getAssignmentId());
-        if (!assignmentClassService.includesClass(assignment, current.className())) {
+        if (assignment == null || !assignmentClassService.teacherCanAccess(assignment, current)) {
             return false;
         }
         TUser student = userMapper.selectById(submission.getStudentId());
-        return student != null && sameClass(current.className(), student.getClassName());
+        return student != null && teacherClassService.manages(current, student.getClassName());
     }
 
     /** 校验学生只能访问自己的提交记录 */
@@ -131,7 +140,7 @@ public class AccessControlService {
             throw BusinessException.notFound("学生不存在");
         }
         AuthUser current = AuthContext.get();
-        if (!current.isAdmin() && !sameClass(current.className(), student.getClassName())) {
+        if (!current.isAdmin() && !teacherClassService.manages(current, student.getClassName())) {
             throw BusinessException.forbidden("只能管理自己班级的学生");
         }
         return student;
@@ -139,7 +148,7 @@ public class AccessControlService {
 
     public boolean canReadAssignmentStats(AuthUser current, TAssignment assignment) {
         return assignment != null
-                && (current.isAdmin() || assignmentClassService.includesClass(assignment, current.className()));
+                && assignmentClassService.teacherCanAccess(assignment, current);
     }
 
     public boolean sameClass(String expected, String actual) {

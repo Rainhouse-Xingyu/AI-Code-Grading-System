@@ -45,6 +45,8 @@
           @reset-assignment-form="resetAssignmentForm"
           @select-assignment="selectAssignment"
           @template-change="onAssignmentTemplateChange"
+          @release-class="openClassRelease"
+          @view-class-releases="viewClassReleases"
         />
 
         <section v-show="activeTeacherModule === 'students'" class="teacher-module-panel students-module-panel">
@@ -246,7 +248,7 @@
                       no-data-text="当前学期暂无作业"
                     >
                       <el-option
-                        v-for="assignment in assignments"
+                        v-for="assignment in operationalAssignments"
                         :key="assignment.id"
                         :label="`${assignment.title || '未命名作业'}${assignment.status === 'draft' ? '（草稿）' : ''}`"
                         :value="assignment.id"
@@ -545,7 +547,7 @@
                     placeholder="选择作业"
                   >
                     <el-option
-                      v-for="assignment in assignments"
+                      v-for="assignment in operationalAssignments"
                       :key="assignment.id"
                       :label="assignment.title"
                       :value="assignment.id"
@@ -642,7 +644,7 @@
                     placeholder="选择作业"
                   >
                     <el-option
-                      v-for="assignment in assignments"
+                      v-for="assignment in operationalAssignments"
                       :key="assignment.id"
                       :label="assignment.title"
                       :value="assignment.id"
@@ -757,10 +759,11 @@
                     </div>
                     <div class="table-shell score-table-shell">
                       <el-table :data="dimensionScores" class="dimension-table" size="small" border empty-text="报告中没有分项得分">
+                        <el-table-column label="评分方式" width="130"><template #default="{ row }">{{ scoringMethodLabel(row.scoring_method) }}</template></el-table-column>
                         <el-table-column label="评分维度" min-width="160">
                           <template #default="{ row }">
                             <span>{{ row.name }}</span>
-                            <el-tag v-if="row.manual_review_required" size="small" type="warning" effect="plain" class="ml-2">待人工</el-tag>
+                            <el-tag v-if="row.manual_review_required && row.manual_review_status !== 'completed'" size="small" type="warning" effect="plain" class="ml-2">待人工</el-tag>
                           </template>
                         </el-table-column>
                         <el-table-column label="得分" width="130">
@@ -1127,10 +1130,35 @@
       </el-table>
       </div>
     </el-dialog>
+    <el-dialog v-model="classReleaseVisible" :title="classReleaseTarget?.parentAssignmentId ? '调整本班作业时间' : '根据总任务发布本班作业'" width="560px">
+      <el-alert title="题目、评分标准与总任务一致。这里只设置本班的开放和截止时间。" type="info" :closable="false" />
+      <el-form label-position="top">
+        <el-form-item label="总任务"><span>{{ classReleaseTarget?.title }}</span></el-form-item>
+        <el-form-item label="负责班级">
+          <el-select v-model="classReleaseForm.className" :disabled="Boolean(classReleaseTarget?.parentAssignmentId)">
+            <el-option v-for="name in classReleaseTarget?.parentAssignmentId ? assignmentClassNames(classReleaseTarget) : classReleaseTarget?.releasableClassNames || []" :key="name" :label="name" :value="name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="开始时间（不填则立即开放）"><el-date-picker v-model="classReleaseForm.startTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable /></el-form-item>
+        <el-form-item label="截止时间"><el-date-picker v-model="classReleaseForm.endTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="classReleaseVisible = false">取消</el-button><el-button type="primary" :loading="classReleaseSaving" @click="saveClassRelease">{{ classReleaseTarget?.parentAssignmentId ? '保存时间' : '发布本班作业' }}</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="classProgressVisible" title="各班发布进度" width="860px">
+      <el-table :data="classReleaseRows">
+        <el-table-column prop="className" label="班级" min-width="120" />
+        <el-table-column prop="teacherName" label="发布老师" min-width="110" />
+        <el-table-column label="发布状态" min-width="140"><template #default="{ row }">{{ row.status === 'published' ? '已发布' : '待任课老师发布' }}</template></el-table-column>
+        <el-table-column label="开始时间" min-width="170"><template #default="{ row }">{{ row.startTime ? row.startTime.replace('T', ' ').slice(0, 16) : row.status === 'published' ? '立即开放' : '—' }}</template></el-table-column>
+        <el-table-column label="截止时间" min-width="170"><template #default="{ row }">{{ row.endTime ? row.endTime.replace('T', ' ').slice(0, 16) : '—' }}</template></el-table-column>
+        <el-table-column prop="submitted" label="已交" width="70" />
+      </el-table>
+    </el-dialog>
   </section>
 </template>
 
 <script setup>
+import { scoringMethodLabel } from "../JS/rubric.js";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { messageOf } from "../JS/api.js";
@@ -1247,6 +1275,13 @@ const templateSaving = ref(false);
 const templateImporting = ref(false);
 const selectedAssignment = ref(null);
 const editingAssignmentId = ref(null);
+const operationalAssignments = computed(() => assignments.value.filter(item => !item.teacherReleaseRequired));
+const classReleaseVisible = ref(false);
+const classReleaseSaving = ref(false);
+const classReleaseTarget = ref(null);
+const classReleaseForm = reactive({ className: '', startTime: '', endTime: '' });
+const classProgressVisible = ref(false);
+const classReleaseRows = ref([]);
 const selectedSubmission = ref(null);
 const assignmentStats = ref(null);
 const report = ref(null);
@@ -1279,6 +1314,7 @@ const submissionStatusOptions = [
   { label: "已发布", value: "published" }
 ];
 const assignmentForm = reactive({
+  teacherReleaseRequired: true,
   title: "Java OOP Homework",
   courseName: "",
   description: "请上传 zip 格式代码包",
@@ -1431,6 +1467,9 @@ watch(selectedAssignment, (nextAssignment, previousAssignment) => {
 });
 
 watch(activeTeacherModule, (nextModule) => {
+  if (nextModule !== "assignments" && assignments.value.some(item => sameEntityId(item.id, selectedAssignment.value) && item.teacherReleaseRequired)) {
+    selectedAssignment.value = operationalAssignments.value[0]?.id || null;
+  }
   if (nextModule === "assignments" && editingAssignmentId.value) {
     refreshEditingAssignmentStats(editingAssignmentId.value);
   }
@@ -1779,7 +1818,7 @@ async function createAssignment(published) {
     editingAssignmentId.value = created.id;
     refreshEditingAssignmentStats(created.id);
     ElMessage.success(published
-      ? `作业已发布至：${assignmentClassNames(created).join("、")}`
+      ? (created.teacherReleaseRequired ? '总任务已下发，等待任课老师按班发布' : `作业已发布至：${assignmentClassNames(created).join("、")}`)
       : "草稿已创建");
   } catch (error) {
     if (error !== "cancel") ElMessage.error(messageOf(error));
@@ -1794,6 +1833,7 @@ function selectAssignment(row) {
     editingAssignmentId.value = row.id;
     refreshEditingAssignmentStats(row.id);
     assignmentForm.title = row.title || "";
+    assignmentForm.teacherReleaseRequired = Boolean(row.teacherReleaseRequired);
     assignmentForm.courseName = row.courseName || "";
     assignmentForm.description = row.description || "";
     assignmentForm.language = row.language || "java";
@@ -1835,6 +1875,41 @@ async function saveAssignment() {
   }
 }
 
+function openClassRelease(row) {
+  classReleaseTarget.value = row;
+  classReleaseForm.className = row.parentAssignmentId ? assignmentClassNames(row)[0] : row.releasableClassNames?.[0] || '';
+  classReleaseForm.startTime = row.parentAssignmentId ? row.startTime || '' : '';
+  classReleaseForm.endTime = row.parentAssignmentId ? row.endTime || '' : '';
+  classReleaseVisible.value = true;
+}
+
+async function saveClassRelease() {
+  if (!classReleaseForm.className || !classReleaseForm.endTime) {
+    ElMessage.warning('请选择负责班级和截止时间');
+    return;
+  }
+  classReleaseSaving.value = true;
+  try {
+    const target = classReleaseTarget.value;
+    const payload = { ...classReleaseForm, startTime: classReleaseForm.startTime || null };
+    const saved = target.parentAssignmentId
+      ? await props.api.put(`/api/v1/assignments/${target.id}/class-schedule`, payload)
+      : await props.api.post(`/api/v1/assignments/${target.id}/class-release`, payload);
+    classReleaseVisible.value = false;
+    await refreshAll();
+    selectedAssignment.value = saved.id;
+    ElMessage.success(target.parentAssignmentId ? '本班作业时间已更新' : '本班作业已发布');
+  } catch (error) { ElMessage.error(messageOf(error)); }
+  finally { classReleaseSaving.value = false; }
+}
+
+async function viewClassReleases(row) {
+  try {
+    classReleaseRows.value = await props.api.get(`/api/v1/assignments/${row.id}/class-releases`);
+    classProgressVisible.value = true;
+  } catch (error) { ElMessage.error(messageOf(error)); }
+}
+
 async function publishAssignment() {
   if (!isAdmin.value) return;
   if (!editingAssignmentId.value) return;
@@ -1848,7 +1923,7 @@ async function publishAssignment() {
     });
     assignments.value = assignments.value.map((item) => (item.id === updated.id ? updated : item));
     selectedAssignment.value = updated.id;
-    ElMessage.success(`作业已发布至：${assignmentClassNames(updated).join("、")}`);
+    ElMessage.success(updated.teacherReleaseRequired ? '总任务已下发，等待任课老师按班发布' : `作业已发布至：${assignmentClassNames(updated).join("、")}`);
   } catch (error) {
     if (error !== "cancel") ElMessage.error(messageOf(error));
   }
@@ -1889,6 +1964,7 @@ function resetAssignmentForm() {
   editingAssignmentId.value = null;
   assignmentStats.value = null;
   assignmentForm.title = "";
+  assignmentForm.teacherReleaseRequired = true;
   assignmentForm.courseName = "";
   assignmentForm.description = "";
   assignmentForm.language = "java";
@@ -1956,8 +2032,10 @@ async function confirmAssignmentPublish() {
     ? `\n注意：${emptyClasses.join("、")} 当前学期尚无学生。`
     : "";
   await ElMessageBox.confirm(
-    `确认发布到 ${classNames.join("、")}，当前覆盖 ${studentCount} 名学生？${emptyClassTip}`,
-    "确认发布班级",
+    assignmentForm.teacherReleaseRequired
+      ? `确认向 ${classNames.join("、")} 下发总任务？学生须等待任课老师按班发布后才能查看。${emptyClassTip}`
+      : `确认发布到 ${classNames.join("、")}，当前覆盖 ${studentCount} 名学生？${emptyClassTip}`,
+    assignmentForm.teacherReleaseRequired ? "确认下发总任务" : "确认发布班级",
     {
       type: emptyClasses.length ? "warning" : "info",
       confirmButtonText: "确认发布",
@@ -1986,6 +2064,10 @@ async function loadRubricTemplateItems(templateId, selectEnabled) {
       assignmentForm.selectedRubricItemIds = rubricTemplateItems.value
         .filter((item) => item.enabled === 1 || item.enabled === true)
         .map((item) => item.id);
+    } else {
+      const oldIds = assignmentForm.selectedRubricItemIds;
+      assignmentForm.selectedRubricItemIds = rubricTemplateItems.value.filter(item =>
+        (item.legacyItemIds || [item.id]).some(id => oldIds.includes(Number(id)))).map(item => item.id);
     }
   } catch (error) {
     rubricTemplateItems.value = [];
@@ -2001,8 +2083,14 @@ function emptyRubricTemplateItem(order = 1) {
     pointName: "",
     pointScore: 10,
     criteria: "",
+    scoringMethod: "",
+    scoreBands: [],
     enabled: true
   };
+}
+
+function parseScoreBands(value) {
+  try { return JSON.parse(value || "[]"); } catch { return []; }
 }
 
 function resetRubricTemplateForm() {
@@ -2026,6 +2114,8 @@ function editRubricTemplate(row) {
     pointName: item.pointName || "",
     pointScore: Number(item.pointScore || 10),
     criteria: item.criteria || "",
+    scoringMethod: item.scoringMethod || "",
+    scoreBands: parseScoreBands(item.scoreBandsJson),
     enabled: item.enabled === undefined ? true : Boolean(item.enabled)
   }));
 }
@@ -2057,7 +2147,8 @@ async function saveRubricTemplate() {
       ...item,
       dimensionOrder: Number(item.dimensionOrder || index + 1),
       pointOrder: Number(item.pointOrder || 1),
-      pointScore: Number(item.pointScore || 0)
+      pointScore: Number(item.pointScore || 0),
+      scoreBandsJson: JSON.stringify(item.scoreBands || [])
     }))
   };
   try {
@@ -2757,7 +2848,8 @@ async function saveReview() {
     await props.api.put(`/api/v1/teacher-reviews/${selectedSubmission.value}`, {
       finalScore: Number(dimensionScores.value.length ? dimensionTotal.value : (finalScore.value || report.value.totalScore)),
       finalComment: reviewComment.value,
-      modifiedJson: JSON.stringify(dimensionScores.value.length ? dimensionScores.value : parseDimensionScores(report.value.scoreJson)),
+      modifiedJson: JSON.stringify((dimensionScores.value.length ? dimensionScores.value : parseDimensionScores(report.value.scoreJson))
+        .map(row => row.manual_review_required ? { ...row, manual_review_status: "completed" } : row)),
       modifiedMarkdown: reportMarkdown.value || report.value.reportMarkdown || ""
     });
     await refreshSubmissions();
@@ -2778,7 +2870,8 @@ function parseDimensionScores(value) {
       max_score: Number(item.max_score ?? item.maxScore ?? item.weight ?? 100),
       comment: item.comment || item.feedback || "",
       manual_review_required: Boolean(item.manual_review_required),
-      manual_review_status: item.manual_review_status || ""
+      manual_review_status: item.manual_review_status || "",
+      scoring_method: item.scoring_method || (item.manual_review_required ? "manual" : "")
     }));
   } catch {
     return [];

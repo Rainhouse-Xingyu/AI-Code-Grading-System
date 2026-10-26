@@ -22,6 +22,15 @@ import lombok.Setter;
 @ApiModel(value = "TAssignment对象", description = "作业实体")
 public class TAssignment implements Serializable {
 
+    @TableField("parent_assignment_id")
+    private Long parentAssignmentId;
+
+    @TableField("teacher_release_required")
+    private Boolean teacherReleaseRequired;
+
+    @TableField(exist = false)
+    private java.util.List<String> releasableClassNames;
+
     private static final long serialVersionUID = 1L;
 
     /** 作业主键ID，自增 */

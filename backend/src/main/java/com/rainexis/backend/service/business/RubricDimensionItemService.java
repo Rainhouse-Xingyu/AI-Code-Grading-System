@@ -77,6 +77,17 @@ public class RubricDimensionItemService {
                 .isNull(TRubricDimensionItem::getRubricId));
     }
 
+    public void copyAssignmentTemplateItems(Long sourceId, Long targetId) {
+        clearAssignmentTemplateItems(targetId);
+        for (TRubricDimensionItem item : itemMapper.selectList(new LambdaQueryWrapper<TRubricDimensionItem>()
+                .eq(TRubricDimensionItem::getAssignmentId, sourceId).isNull(TRubricDimensionItem::getRubricId))) {
+            item.setId(null);
+            item.setAssignmentId(targetId);
+            item.setCreatedAt(LocalDateTime.now());
+            itemMapper.insert(item);
+        }
+    }
+
     private void insertAssignmentTemplateItems(Long assignmentId, List<TRubricTemplateItem> selectedItems) {
         BigDecimal total = selectedItems.stream()
                 .map(TRubricTemplateItem::getPointScore)

@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS t_assignment (
   rubric_template_id BIGINT,
   selected_rubric_item_ids LONGTEXT,
   normalized_rubric_json LONGTEXT,
+  parent_assignment_id BIGINT,
+  teacher_release_required TINYINT DEFAULT 0,
   semester_id BIGINT,
   status VARCHAR(20) DEFAULT 'draft',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -136,6 +138,8 @@ CREATE TABLE IF NOT EXISTS t_rubric_template_item (
   point_score DECIMAL(8,2) NOT NULL,
   point_ratio DECIMAL(8,4),
   criteria LONGTEXT,
+  scoring_method VARCHAR(30),
+  score_bands_json LONGTEXT,
   enabled TINYINT DEFAULT 1,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

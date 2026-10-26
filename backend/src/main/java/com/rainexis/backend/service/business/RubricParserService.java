@@ -116,7 +116,8 @@ public class RubricParserService {
                     ? maxScore
                     : parseScoreSpecStrict(weight, "Excel 第 " + (i + 1) + " 行权重格式不正确").max();
             String pointName = itemName.isBlank() ? name : itemName;
-            String bandKey = name + "\u0001" + pointName;
+            String bandPointName = pointName.replaceFirst("[\\d０-９]+$", "").trim();
+            String bandKey = name + "\u0001" + bandPointName;
             Map<String, Object> existingBandDimension = bandDimensions.get(bandKey);
             if (scoreSpec.range() || existingBandDimension != null) {
                 Map<String, Object> dimension = existingBandDimension;
@@ -124,7 +125,7 @@ public class RubricParserService {
                     BigDecimal dimensionMaxScore = weightScore.compareTo(maxScore) > 0 ? weightScore : maxScore;
                     dimension = dimension(name, weightScore, dimensionMaxScore, "");
                     dimension.put("items", List.of(new LinkedHashMap<>(Map.of(
-                            "name", pointName,
+                            "name", bandPointName,
                             "max_score", dimensionMaxScore,
                             "criteria", ""
                     ))));

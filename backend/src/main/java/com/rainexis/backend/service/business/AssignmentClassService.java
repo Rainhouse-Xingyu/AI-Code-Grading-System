@@ -15,9 +15,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class AssignmentClassService {
     private final TAssignmentClassMapper assignmentClassMapper;
+    private final TeacherClassService teacherClassService;
 
-    public AssignmentClassService(TAssignmentClassMapper assignmentClassMapper) {
+    public AssignmentClassService(TAssignmentClassMapper assignmentClassMapper, TeacherClassService teacherClassService) {
         this.assignmentClassMapper = assignmentClassMapper;
+        this.teacherClassService = teacherClassService;
     }
 
     public List<String> normalize(List<String> classNames) {
@@ -107,13 +109,13 @@ public class AssignmentClassService {
         if ("admin".equals(current.role())) {
             return classes;
         }
-        if (current.className() == null || current.className().isBlank()) {
-            return List.of();
-        }
-        if (classes.isEmpty() || classes.contains(current.className())) {
-            return List.of(current.className());
-        }
-        return List.of();
+        return teacherClassService.managedClasses(current).stream().filter(classes::contains).toList();
+    }
+
+    public boolean teacherCanAccess(TAssignment assignment, AuthUser current) {
+        if (current.isAdmin()) return true;
+        if (assignment.getParentAssignmentId() != null && !current.id().equals(assignment.getTeacherId())) return false;
+        return !visibleClassNames(assignment, current).isEmpty();
     }
 
     public List<String> parseLegacyClassName(String value) {
