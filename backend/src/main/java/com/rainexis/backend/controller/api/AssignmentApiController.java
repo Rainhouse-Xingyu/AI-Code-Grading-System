@@ -56,7 +56,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DuplicateKeyException;
-import java.util.LinkedHashMap;
 
 /**
  * 作业管理 API 控制器
@@ -131,6 +130,12 @@ public class AssignmentApiController {
         this.templateStructureService = templateStructureService;
     }
 
+    @GetMapping("/my-classes")
+    public ApiResponse<List<String>> myClasses() {
+        AuthContext.requireTeacher();
+        return ApiResponse.ok(assignmentClassService.managedClassNames(AuthContext.get()));
+    }
+
     @GetMapping
     public ApiResponse<List<TAssignment>> list(@RequestParam(name = "class_id", required = false) String classId,
                                                @RequestParam(name = "semesterId", required = false) Long semesterId) {
@@ -160,7 +165,7 @@ public class AssignmentApiController {
             if (Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) {
                 List<String> used = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, assignment.getId()))
                         .stream().map(TAssignment::getClassName).toList();
-                assignment.setReleasableClassNames(assignmentClassService.visibleClassNames(assignment, current).stream().filter(name -> !used.contains(name)).toList());
+                assignment.setReleasableClassNames(assignmentClassService.ownClassNames(assignment, current).stream().filter(name -> !used.contains(name)).toList());
             }
         }
         return ApiResponse.ok(assignmentClassService.attachClassNames(assignments));
@@ -175,7 +180,7 @@ public class AssignmentApiController {
             throw BusinessException.badRequest("作业标题不能为空");
         }
         List<String> classNames = requestClassNames(request);
-        if (classNames.isEmpty()) {
+        if (classNames.isEmpty() && !Boolean.TRUE.equals(request.teacherReleaseRequired())) {
             throw BusinessException.badRequest("请选择至少一个发布班级");
         }
         TAssignment assignment = new TAssignment();
@@ -200,6 +205,7 @@ public class AssignmentApiController {
         assignmentMapper.insert(assignment);
         assignmentClassService.replaceClasses(assignment.getId(), classNames);
         persistTemplateDimensionItems(assignment.getId(), selectedTemplateItems);
+        if (request.published()) releaseOwnClasses(assignment, request.ownClassRelease());
         return ApiResponse.ok(assignmentClassService.attachClassNames(assignment));
     }
 
@@ -209,6 +215,9 @@ public class AssignmentApiController {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         semesterService.requireActive(assignment.getSemesterId());
+        if (assignment.getParentAssignmentId() != null) {
+            throw BusinessException.forbidden("班级子作业沿用总任务内容和评分标准，只能通过调整时间修改发布时间和截止时间");
+        }
         if ("published".equals(assignment.getStatus())) {
             if (request == null || request.title() == null || request.title().isBlank()) {
                 throw BusinessException.badRequest("作业标题不能为空");
@@ -223,7 +232,7 @@ public class AssignmentApiController {
             throw BusinessException.badRequest("作业标题不能为空");
         }
         List<String> classNames = requestClassNames(request);
-        if (classNames.isEmpty()) {
+        if (classNames.isEmpty() && !Boolean.TRUE.equals(request.teacherReleaseRequired())) {
             throw BusinessException.badRequest("请选择至少一个发布班级");
         }
         assignment.setTitle(request.title());
@@ -244,23 +253,29 @@ public class AssignmentApiController {
         assignmentMapper.updateById(assignment);
         assignmentClassService.replaceClasses(assignment.getId(), classNames);
         persistTemplateDimensionItems(assignment.getId(), selectedTemplateItems);
+        if (request.published()) releaseOwnClasses(assignment, request.ownClassRelease());
         return ApiResponse.ok(assignmentClassService.attachClassNames(assignment));
     }
 
     /** 发布作业（变为学生可见） */
     @PatchMapping("/{id}/publish")
-    public ApiResponse<TAssignment> publish(@PathVariable Long id) {
+    @Transactional
+    public ApiResponse<TAssignment> publish(@PathVariable Long id, @RequestBody(required = false) OwnClassReleaseRequest ownClassRelease) {
         AuthContext.requireAdmin();
         TAssignment assignment = accessControlService.requireAssignmentOwner(id);
         semesterService.requireActive(assignment.getSemesterId());
+        if ("published".equals(assignment.getStatus()) && ownClassRelease != null && ownClassRelease.classNames() != null && !ownClassRelease.classNames().isEmpty()) {
+            throw BusinessException.conflict("总任务已下发，请使用“发布到本班”单独发布");
+        }
         if (assignment.getNormalizedRubricJson() == null || assignment.getNormalizedRubricJson().isBlank()) {
             throw BusinessException.badRequest("发布作业前请选择管理员发布的评分模板和评分点");
         }
-        if (assignmentClassService.classNames(assignment).isEmpty()) {
+        if (assignmentClassService.classNames(assignment).isEmpty() && !Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) {
             throw BusinessException.badRequest("发布作业前请选择至少一个班级");
         }
         assignment.setStatus("published");
         assignmentMapper.updateById(assignment);
+        releaseOwnClasses(assignment, ownClassRelease);
         return ApiResponse.ok(assignmentClassService.attachClassNames(assignment));
     }
 
@@ -314,7 +329,9 @@ public class AssignmentApiController {
     public ApiResponse<Map<String, Object>> stats(@PathVariable Long id) {
         AuthContext.requireTeacher();
         TAssignment assignment = accessControlService.requireAssignmentAccess(id);
-        List<String> visibleClasses = assignmentClassService.visibleClassNames(assignment, AuthContext.get());
+        List<String> visibleClasses = Boolean.TRUE.equals(assignment.getTeacherReleaseRequired()) && AuthContext.get().isAdmin()
+                ? globalProgressClasses(assignment, assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id)))
+                : assignmentClassService.visibleClassNames(assignment, AuthContext.get());
         String className = visibleClasses.isEmpty() ? "" : String.join(",", visibleClasses);
         LambdaQueryWrapper<TUser> studentQuery = new LambdaQueryWrapper<TUser>()
                 .eq(TUser::getRole, "student");
@@ -606,7 +623,25 @@ public class AssignmentApiController {
     public record AssignmentRequest(String title, String courseName, String description, String language, String className, List<String> classNames,
                                     LocalDateTime startTime,
                                     LocalDateTime endTime, String latePolicy, Integer latePenaltyPercent, boolean published,
-                                    Long rubricTemplateId, List<Long> selectedRubricItemIds, Boolean teacherReleaseRequired) {
+                                    Long rubricTemplateId, List<Long> selectedRubricItemIds, Boolean teacherReleaseRequired,
+                                    OwnClassReleaseRequest ownClassRelease) {
+    }
+
+    public record OwnClassReleaseRequest(List<String> classNames, LocalDateTime startTime, LocalDateTime endTime) {}
+
+    private void releaseOwnClasses(TAssignment master, OwnClassReleaseRequest request) {
+        if (request == null || request.classNames() == null || request.classNames().isEmpty()) return;
+        if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired())) {
+            throw BusinessException.badRequest("只有总任务支持同时发布本人负责班级");
+        }
+        List<String> selected = assignmentClassService.normalize(request.classNames());
+        if (selected.isEmpty()) throw BusinessException.badRequest("请选择本人负责班级");
+        List<String> allowed = assignmentClassService.ownClassNames(master, AuthContext.get());
+        if (!allowed.containsAll(selected)) throw BusinessException.forbidden("只能同时发布本人负责的班级");
+        validateSchedule(request.startTime(), request.endTime());
+        for (String className : selected) {
+            createClassAssignment(master, new ClassReleaseRequest(className, request.startTime(), request.endTime()));
+        }
     }
 
     @PostMapping("/{id}/class-release")
@@ -617,10 +652,14 @@ public class AssignmentApiController {
         if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired()) || master.getParentAssignmentId() != null || !"published".equals(master.getStatus())) {
             throw BusinessException.badRequest("只能从已下发的总任务发布班级作业");
         }
-        if (request == null || !assignmentClassService.visibleClassNames(master, AuthContext.get()).contains(request.className())) {
-            throw BusinessException.forbidden("只能发布总任务范围内自己负责的班级");
+        if (request == null || !assignmentClassService.ownClassNames(master, AuthContext.get()).contains(request.className())) {
+            throw BusinessException.forbidden("只能发布自己负责的班级");
         }
         validateSchedule(request.startTime(), request.endTime());
+        return ApiResponse.ok(createClassAssignment(master, request));
+    }
+
+    private TAssignment createClassAssignment(TAssignment master, ClassReleaseRequest request) {
         TAssignment child = new TAssignment();
         child.setTitle(master.getTitle());
         child.setCourseName(master.getCourseName());
@@ -644,15 +683,15 @@ public class AssignmentApiController {
         catch (DuplicateKeyException ex) { throw BusinessException.conflict("这个班级已经发布过该任务，请刷新查看"); }
         assignmentClassService.replaceClasses(child.getId(), List.of(request.className()));
         dimensionItemService.copyAssignmentTemplateItems(master.getId(), child.getId());
-        return ApiResponse.ok(assignmentClassService.attachClassNames(child));
+        return assignmentClassService.attachClassNames(child);
     }
 
     @PutMapping("/{id}/class-schedule")
     public ApiResponse<TAssignment> updateClassSchedule(@PathVariable Long id, @RequestBody ClassReleaseRequest request) {
         TAssignment child = accessControlService.requireAssignmentAccess(id);
         semesterService.requireActive(child.getSemesterId());
-        if (child.getParentAssignmentId() == null || (!AuthContext.get().isAdmin() && !AuthContext.get().id().equals(child.getTeacherId()))) {
-            throw BusinessException.forbidden("只能调整自己发布的班级作业时间");
+        if (child.getParentAssignmentId() == null || assignmentClassService.ownClassNames(child, AuthContext.get()).isEmpty()) {
+            throw BusinessException.forbidden("只能调整本班班级作业时间");
         }
         if (request == null) throw BusinessException.badRequest("请填写本班作业时间");
         validateSchedule(request.startTime(), request.endTime());
@@ -665,10 +704,39 @@ public class AssignmentApiController {
 
     @GetMapping("/{id}/class-releases")
     public ApiResponse<List<Map<String, Object>>> classReleases(@PathVariable Long id) {
+        AuthContext.requireAdmin();
         TAssignment master = accessControlService.requireAssignmentAccess(id);
         List<TAssignment> children = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id));
+        return ApiResponse.ok(releaseRows(globalProgressClasses(master, children), children));
+    }
+
+    @GetMapping("/{id}/my-class-releases")
+    public ApiResponse<List<Map<String, Object>>> myClassReleases(@PathVariable Long id) {
+        TAssignment master = accessControlService.requireAssignmentAccess(id);
+        List<TAssignment> children = assignmentMapper.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id));
+        return ApiResponse.ok(releaseRows(assignmentClassService.ownClassNames(master, AuthContext.get()), children));
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<TAssignment> detail(@PathVariable Long id) {
+        return ApiResponse.ok(accessControlService.requireAssignmentAccess(id));
+    }
+
+    private List<String> globalProgressClasses(TAssignment master, List<TAssignment> children) {
+        var names = new java.util.LinkedHashSet<>(assignmentClassService.classNames(master));
+        names.addAll(assignmentClassService.allManagedClassNames());
+        List<Long> enrolled = semesterService.studentIds(master.getSemesterId());
+        if (!enrolled.isEmpty()) {
+            userMapper.selectList(new LambdaQueryWrapper<TUser>().eq(TUser::getRole, "student").in(TUser::getId, enrolled))
+                    .stream().map(TUser::getClassName).filter(value -> value != null && !value.isBlank()).forEach(names::add);
+        }
+        children.stream().map(TAssignment::getClassName).filter(value -> value != null && !value.isBlank()).forEach(names::add);
+        return names.stream().sorted().toList();
+    }
+
+    private List<Map<String, Object>> releaseRows(List<String> classes, List<TAssignment> children) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (String name : assignmentClassService.visibleClassNames(master, AuthContext.get())) {
+        for (String name : classes) {
             TAssignment child = children.stream().filter(value -> name.equals(value.getClassName())).findFirst().orElse(null);
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("className", name);
@@ -682,7 +750,7 @@ public class AssignmentApiController {
                     .eq(TSubmission::getAssignmentId, child.getId()).eq(TSubmission::getCurrent, true)));
             rows.add(row);
         }
-        return ApiResponse.ok(rows);
+        return rows;
     }
 
     private void validateSchedule(LocalDateTime start, LocalDateTime end) {

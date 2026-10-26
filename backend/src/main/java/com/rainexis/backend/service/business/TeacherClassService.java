@@ -1,6 +1,8 @@
 package com.rainexis.backend.service.business;
 
 import com.rainexis.backend.mapper.TUserMapper;
+import com.rainexis.backend.entity.TUser;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.rainexis.backend.security.AuthUser;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -47,4 +49,13 @@ public class TeacherClassService {
     }
 
     public boolean manages(AuthUser user, String className) { return managedClasses(user).contains(className); }
+
+    public List<String> allManagedClasses() {
+        var names = new LinkedHashSet<String>();
+        for (var teacher : userMapper.selectList(new LambdaQueryWrapper<TUser>().in(TUser::getRole, List.of("teacher", "admin")))) {
+            String configured = teacher.getTeachingClass();
+            names.addAll(parse(configured == null || configured.isBlank() ? teacher.getClassName() : configured));
+        }
+        return new ArrayList<>(names);
+    }
 }

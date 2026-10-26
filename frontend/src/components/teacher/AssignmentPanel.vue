@@ -4,7 +4,7 @@
       <div class="module-intro-copy">
         <span class="module-kicker">教学内容</span>
         <h3>作业管理</h3>
-        <p>{{ isAdmin ? '下发统一总任务和评分标准，查看各班发布进度。' : '根据本班进度发布总任务，各班时间和学生成绩独立管理。' }}</p>
+        <p>{{ isAdmin ? '统一发布总任务，所有任课老师可见；各班独立开放给学生。' : '先查看管理员发布的作业内容，再按教学进度开放给本人班级。' }}</p>
       </div>
       <div class="module-summary-grid assignment-overview-grid" aria-label="作业概览">
         <MetricCard label="全部作业" :value="assignmentOverview.total" />
@@ -40,7 +40,7 @@
             <el-form-item label="发布方式">
               <el-switch v-model="assignmentForm.teacherReleaseRequired" :disabled="isPublishedAssignment" active-text="下发总任务，由老师按班发布" inactive-text="直接发布（兼容原流程）" />
             </el-form-item>
-            <el-alert v-if="assignmentForm.teacherReleaseRequired" title="下发后学生不会直接看到总任务。任课老师选择自己负责的班级和时间后，学生才能看到对应班级作业。" type="info" :closable="false" />
+            <el-alert v-if="assignmentForm.teacherReleaseRequired" title="总任务发布后，所有任课老师都能查看完整作业内容。学生仅在任课老师发布到本班后可见；管理员也可同时发布本人班级。" type="info" :closable="false" />
             <div class="form-section-heading">
               <strong>基本信息</strong>
               <span>用于学生识别作业及所属课程</span>
@@ -60,7 +60,7 @@
                   <el-option label="JavaScript" value="javascript" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="发布班级" class="assignment-class-field">
+              <el-form-item v-if="!assignmentForm.teacherReleaseRequired" label="发布班级" class="assignment-class-field">
                 <el-select
                   v-model="assignmentForm.classNames"
                   multiple
@@ -115,6 +115,23 @@
                 />
               </el-form-item>
             </div>
+          </section>
+
+          <section v-if="assignmentForm.teacherReleaseRequired && !isPublishedAssignment" class="assignment-form-section">
+            <el-checkbox v-model="ownClassReleaseForm.enabled">下发总任务时，同时发布本人负责班级</el-checkbox>
+            <p>只发布勾选的本人班级，其他老师的班级仍由他们自行发布。保存草稿不会发布班级作业，下发时请确认本次选择。</p>
+            <el-alert v-if="!ownClassOptions.length" title="尚未配置本人负责班级，请先在教师资料中配置准确的负责班级。" type="info" :closable="false" />
+            <template v-if="ownClassReleaseForm.enabled">
+              <el-form-item label="同时发布的本人班级">
+                <el-select v-model="ownClassReleaseForm.classNames" multiple placeholder="选择本人负责班级">
+                  <el-option v-for="name in ownClassOptions" :key="name" :label="name" :value="name" />
+                </el-select>
+              </el-form-item>
+              <div class="assignment-field-grid">
+                <el-form-item label="本班开始时间（不填则立即开放）"><el-date-picker v-model="ownClassReleaseForm.startTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable /></el-form-item>
+                <el-form-item label="本班截止时间"><el-date-picker v-model="ownClassReleaseForm.endTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item>
+              </div>
+            </template>
           </section>
 
           <section class="assignment-form-section assignment-rubric-section">
@@ -219,7 +236,7 @@
             <el-table-column prop="courseName" label="课程" min-width="130" show-overflow-tooltip />
             <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
             <el-table-column label="班级" min-width="130" show-overflow-tooltip>
-              <template #default="{ row }">{{ displayAssignmentClasses(row) || "-" }}</template>
+              <template #default="{ row }">{{ row.teacherReleaseRequired ? '全体任课老师可见' : displayAssignmentClasses(row) || "-" }}</template>
             </el-table-column>
             <el-table-column label="截止时间" min-width="150" show-overflow-tooltip>
               <template #default="{ row }">{{ formatDateTime(row.endTime) }}</template>
@@ -230,11 +247,12 @@
                 <el-tag :type="assignmentStatusType(row.status)" size="small">{{ assignmentStatusText(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column label="操作" width="300" fixed="right">
               <template #default="{ row }">
-                <el-button v-if="row.teacherReleaseRequired && row.status === 'published'" link type="primary" @click.stop="$emit('view-class-releases', row)">班级发布进度</el-button>
-                <el-button v-if="!isAdmin && row.teacherReleaseRequired && row.releasableClassNames?.length" link type="success" @click.stop="$emit('release-class', row)">发布到本班</el-button>
-                <el-button v-if="row.parentAssignmentId" link type="primary" @click.stop="$emit('release-class', row)">调整时间</el-button>
+                <el-button link type="primary" @click.stop="$emit('view-assignment', row)">查看作业</el-button>
+                <el-button v-if="row.teacherReleaseRequired && row.status === 'published'" link type="primary" @click.stop="$emit('view-class-releases', row)">{{ isAdmin ? '各班发布进度' : '本班发布状态' }}</el-button>
+                <el-button v-if="row.status === 'published' && row.teacherReleaseRequired && row.releasableClassNames?.length" link type="success" @click.stop="$emit('release-class', row)">发布到本班</el-button>
+                <el-button v-if="row.parentAssignmentId && ownClassOptions.some(name => row.classNames?.includes(name))" link type="primary" @click.stop="$emit('release-class', row)">调整时间</el-button>
                 <el-button v-if="isAdmin && !row.parentAssignmentId" link type="primary" @click.stop="$emit('select-assignment', row)">修改</el-button>
                 <el-button v-if="isAdmin" link type="danger" @click.stop="$emit('delete-assignment', row)">
                   {{ row.status === "draft" ? "删除草稿" : "删除作业" }}
@@ -303,6 +321,8 @@ const props = defineProps({
   isAdmin: { type: Boolean, required: true },
   editingAssignmentId: { type: [Number, String, null], default: null },
   assignmentForm: { type: Object, required: true },
+  ownClassReleaseForm: { type: Object, required: true },
+  ownClassOptions: { type: Array, default: () => [] },
   rubricTemplates: { type: Array, default: () => [] },
   rubricTemplateItems: { type: Array, default: () => [] },
   selectedRubricTemplate: { type: Object, default: null },
@@ -313,6 +333,7 @@ const props = defineProps({
 });
 
 defineEmits([
+  "view-assignment",
   "release-class",
   "view-class-releases",
   "save-assignment",

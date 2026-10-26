@@ -31,6 +31,8 @@
           :is-admin="isAdmin"
           :editing-assignment-id="editingAssignmentId"
           :assignment-form="assignmentForm"
+          :own-class-release-form="ownClassReleaseForm"
+          :own-class-options="ownClassOptions"
           :rubric-templates="rubricTemplates"
           :rubric-template-items="rubricTemplateItems"
           :selected-rubric-template="selectedRubricTemplate"
@@ -47,6 +49,7 @@
           @template-change="onAssignmentTemplateChange"
           @release-class="openClassRelease"
           @view-class-releases="viewClassReleases"
+          @view-assignment="viewAssignment"
         />
 
         <section v-show="activeTeacherModule === 'students'" class="teacher-module-panel students-module-panel">
@@ -1131,7 +1134,7 @@
       </div>
     </el-dialog>
     <el-dialog v-model="classReleaseVisible" :title="classReleaseTarget?.parentAssignmentId ? '调整本班作业时间' : '根据总任务发布本班作业'" width="560px">
-      <el-alert title="题目、评分标准与总任务一致。这里只设置本班的开放和截止时间。" type="info" :closable="false" />
+      <el-alert title="子作业沿用总任务的内容和评分标准，只能调整本班发布时间、截止时间。本班提交与成绩独立管理。" type="info" :closable="false" />
       <el-form label-position="top">
         <el-form-item label="总任务"><span>{{ classReleaseTarget?.title }}</span></el-form-item>
         <el-form-item label="负责班级">
@@ -1139,12 +1142,35 @@
             <el-option v-for="name in classReleaseTarget?.parentAssignmentId ? assignmentClassNames(classReleaseTarget) : classReleaseTarget?.releasableClassNames || []" :key="name" :label="name" :value="name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="开始时间（不填则立即开放）"><el-date-picker v-model="classReleaseForm.startTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable /></el-form-item>
+        <el-form-item label="发布时间（不填则立即开放）"><el-date-picker v-model="classReleaseForm.startTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable /></el-form-item>
         <el-form-item label="截止时间"><el-date-picker v-model="classReleaseForm.endTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="classReleaseVisible = false">取消</el-button><el-button type="primary" :loading="classReleaseSaving" @click="saveClassRelease">{{ classReleaseTarget?.parentAssignmentId ? '保存时间' : '发布本班作业' }}</el-button></template>
     </el-dialog>
-    <el-dialog v-model="classProgressVisible" title="各班发布进度" width="860px">
+    <el-dialog v-model="assignmentDetailVisible" title="作业详情（只读）" width="900px">
+      <template v-if="assignmentDetail">
+        <h3>{{ assignmentDetail.title }}</h3>
+        <el-alert v-if="assignmentDetail.teacherReleaseRequired" title="这是管理员统一发布的总任务，所有任课老师可查看。学生需要等待作业发布到本班后才能查看和提交。" type="info" :closable="false" />
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="课程">{{ assignmentDetail.courseName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="语言">{{ assignmentDetail.language || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="可见范围">{{ assignmentDetail.teacherReleaseRequired ? '全体任课老师（学生不可见）' : assignmentClassNames(assignmentDetail).join('、') }}</el-descriptions-item>
+          <el-descriptions-item label="作业要求"><div style="white-space: pre-wrap; overflow-wrap: anywhere;">{{ assignmentDetail.description || '未填写作业要求' }}</div></el-descriptions-item>
+          <el-descriptions-item :label="assignmentDetail.teacherReleaseRequired ? '参考截止时间（各班另行设置）' : '截止时间'">{{ assignmentDetail.endTime?.replace('T', ' ') || '未设置' }}</el-descriptions-item>
+          <el-descriptions-item label="迟交规则">{{ ({forbid:'禁止迟交', allow_mark:'允许迟交并标记', allow_penalty:'允许迟交并扣分'})[assignmentDetail.latePolicy] || '禁止迟交' }}{{ assignmentDetail.latePolicy === 'allow_penalty' ? `（扣 ${assignmentDetail.latePenaltyPercent || 0}%）` : '' }}</el-descriptions-item>
+        </el-descriptions>
+        <h4>本作业评分标准</h4>
+        <el-table :data="assignmentDetailRubric" border>
+          <el-table-column prop="name" label="评分项" min-width="140" />
+          <el-table-column prop="max_score" label="满分" width="80" />
+          <el-table-column label="评分方式" min-width="120"><template #default="{ row }">{{ scoringMethodLabel(row.scoring_method) }}</template></el-table-column>
+          <el-table-column label="评分要求及档位" min-width="300"><template #default="{ row }"><div style="white-space: pre-wrap; overflow-wrap: anywhere;">{{ row.criteria || '—' }}</div></template></el-table-column>
+          <template #empty>本作业尚未配置评分标准</template>
+        </el-table>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="classProgressVisible" :title="isAdmin ? '各班发布进度' : '本班发布状态'" width="860px">
+      <el-alert v-if="!isAdmin" title="仅显示本人负责班级，不包含其他班级的进度。" type="info" :closable="false" />
       <el-table :data="classReleaseRows">
         <el-table-column prop="className" label="班级" min-width="120" />
         <el-table-column prop="teacherName" label="发布老师" min-width="110" />
@@ -1282,6 +1308,15 @@ const classReleaseTarget = ref(null);
 const classReleaseForm = reactive({ className: '', startTime: '', endTime: '' });
 const classProgressVisible = ref(false);
 const classReleaseRows = ref([]);
+const assignmentDetailVisible = ref(false);
+const assignmentDetail = ref(null);
+const assignmentDetailRubric = computed(() => {
+  try {
+    const raw = assignmentDetail.value?.normalizedRubricJson;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed?.dimensions) ? parsed.dimensions : [];
+  } catch { return []; }
+});
 const selectedSubmission = ref(null);
 const assignmentStats = ref(null);
 const report = ref(null);
@@ -1325,6 +1360,12 @@ const assignmentForm = reactive({
   latePenaltyPercent: 0,
   rubricTemplateId: null,
   selectedRubricItemIds: []
+});
+const managedClasses = ref([]);
+const ownClassReleaseForm = reactive({ enabled: false, classNames: [], startTime: '', endTime: '' });
+const ownClassOptions = computed(() => managedClasses.value);
+watch(ownClassOptions, (options) => {
+  ownClassReleaseForm.classNames = ownClassReleaseForm.classNames.filter(name => options.includes(name));
 });
 const templateForm = reactive({
   id: null,
@@ -1434,6 +1475,7 @@ watch(dimensionTotal, (value) => {
 onMounted(async () => {
   await refreshSemesters();
   refreshAssignments();
+  refreshManagedClasses();
   refreshStudents();
   refreshRubricTemplates();
   refreshTokenQuota();
@@ -1639,12 +1681,17 @@ async function refreshSemesters() {
   }
 }
 
+async function refreshManagedClasses() {
+  try {
+    managedClasses.value = await props.api.get('/api/v1/assignments/my-classes');
+  } catch (error) {
+    managedClasses.value = [];
+    ElMessage.error(messageOf(error));
+  }
+}
+
 function refreshAll() {
-  refreshAssignments();
-  refreshStudents();
-  refreshRubricTemplates();
-  refreshTokenQuota();
-  refreshTokenStats();
+  return Promise.all([refreshAssignments(), refreshStudents(), refreshRubricTemplates(), refreshTokenQuota(), refreshTokenStats(), refreshManagedClasses()]);
 }
 
 function changeSemester() {
@@ -1810,15 +1857,16 @@ async function createAssignment(published) {
   }
   if (!validateAssignmentTemplateSelection(published)) return;
   if (!validateAssignmentClasses()) return;
+  if (published && !validateOwnClassRelease()) return;
   try {
     if (published) await confirmAssignmentPublish();
-    const created = await props.api.post("/api/v1/assignments", { ...assignmentForm, published });
-    assignments.value = [created, ...assignments.value];
+    const created = await props.api.post("/api/v1/assignments", { ...assignmentForm, published, ownClassRelease: published ? ownClassReleasePayload() : null });
+    await refreshAssignments();
     selectedAssignment.value = created.id;
     editingAssignmentId.value = created.id;
     refreshEditingAssignmentStats(created.id);
     ElMessage.success(published
-      ? (created.teacherReleaseRequired ? '总任务已下发，等待任课老师按班发布' : `作业已发布至：${assignmentClassNames(created).join("、")}`)
+      ? assignmentPublishMessage(created)
       : "草稿已创建");
   } catch (error) {
     if (error !== "cancel") ElMessage.error(messageOf(error));
@@ -1830,6 +1878,7 @@ function selectAssignment(row) {
   assignmentStatsRequestId++;
   assignmentStats.value = null;
   if (row) {
+    resetOwnClassRelease();
     editingAssignmentId.value = row.id;
     refreshEditingAssignmentStats(row.id);
     assignmentForm.title = row.title || "";
@@ -1905,8 +1954,15 @@ async function saveClassRelease() {
 
 async function viewClassReleases(row) {
   try {
-    classReleaseRows.value = await props.api.get(`/api/v1/assignments/${row.id}/class-releases`);
+    classReleaseRows.value = await props.api.get(`/api/v1/assignments/${row.id}/${isAdmin.value ? 'class-releases' : 'my-class-releases'}`);
     classProgressVisible.value = true;
+  } catch (error) { ElMessage.error(messageOf(error)); }
+}
+
+async function viewAssignment(row) {
+  try {
+    assignmentDetail.value = await props.api.get(`/api/v1/assignments/${row.id}`);
+    assignmentDetailVisible.value = true;
   } catch (error) { ElMessage.error(messageOf(error)); }
 }
 
@@ -1915,15 +1971,17 @@ async function publishAssignment() {
   if (!editingAssignmentId.value) return;
   if (!validateAssignmentTemplateSelection(true)) return;
   if (!validateAssignmentClasses()) return;
+  if (!validateOwnClassRelease()) return;
   try {
     await confirmAssignmentPublish();
     const updated = await props.api.put(`/api/v1/assignments/${editingAssignmentId.value}`, {
       ...assignmentForm,
-      published: true
+      published: true,
+      ownClassRelease: ownClassReleasePayload()
     });
-    assignments.value = assignments.value.map((item) => (item.id === updated.id ? updated : item));
+    await refreshAssignments();
     selectedAssignment.value = updated.id;
-    ElMessage.success(updated.teacherReleaseRequired ? '总任务已下发，等待任课老师按班发布' : `作业已发布至：${assignmentClassNames(updated).join("、")}`);
+    ElMessage.success(assignmentPublishMessage(updated));
   } catch (error) {
     if (error !== "cancel") ElMessage.error(messageOf(error));
   }
@@ -1960,6 +2018,7 @@ async function deleteAssignment(row) {
 }
 
 function resetAssignmentForm() {
+  resetOwnClassRelease();
   assignmentStatsRequestId++;
   editingAssignmentId.value = null;
   assignmentStats.value = null;
@@ -1975,6 +2034,39 @@ function resetAssignmentForm() {
   assignmentForm.rubricTemplateId = null;
   assignmentForm.selectedRubricItemIds = [];
   rubricTemplateItems.value = [];
+}
+
+function resetOwnClassRelease() {
+  Object.assign(ownClassReleaseForm, { enabled: false, classNames: [], startTime: '', endTime: '' });
+}
+
+function ownClassReleasePayload() {
+  if (!assignmentForm.teacherReleaseRequired || !ownClassReleaseForm.enabled) return null;
+  return { classNames: [...ownClassReleaseForm.classNames], startTime: ownClassReleaseForm.startTime || null, endTime: ownClassReleaseForm.endTime || null };
+}
+
+function validateOwnClassRelease() {
+  const release = ownClassReleasePayload();
+  if (!release) return true;
+  if (!release.classNames.length || !release.endTime) {
+    ElMessage.warning('同时发布本人班级时，请选择班级并填写本班截止时间');
+    return false;
+  }
+  if (!release.classNames.every(name => ownClassOptions.value.includes(name))) {
+    ElMessage.warning('只能选择本人负责的班级');
+    return false;
+  }
+  if (new Date(release.endTime) <= (release.startTime ? new Date(release.startTime) : new Date())) {
+    ElMessage.warning('本班截止时间必须晚于开始时间或当前时间');
+    return false;
+  }
+  return true;
+}
+
+function assignmentPublishMessage(assignment) {
+  if (!assignment.teacherReleaseRequired) return `作业已发布至：${assignmentClassNames(assignment).join('、')}`;
+  const own = ownClassReleasePayload();
+  return own ? `总任务已下发，已同时发布本人班级：${own.classNames.join('、')}；其他班级等待任课老师发布` : '总任务已下发，等待任课老师按班发布';
 }
 
 function parseSelectedRubricItemIds(value) {
@@ -2000,6 +2092,7 @@ function validateAssignmentTemplateSelection(requireTemplate = false) {
 }
 
 function validateAssignmentClasses() {
+  if (assignmentForm.teacherReleaseRequired) return true;
   assignmentForm.classNames = normalizedClassNames(assignmentForm.classNames);
   if (!assignmentForm.classNames.length) {
     ElMessage.warning("请选择至少一个发布班级");
@@ -2026,14 +2119,17 @@ function normalizedClassNames(values) {
 
 async function confirmAssignmentPublish() {
   const classNames = normalizedClassNames(assignmentForm.classNames);
+  const own = ownClassReleasePayload();
+  const receivingClasses = assignmentForm.teacherReleaseRequired ? own?.classNames || [] : classNames;
   const studentCount = students.value.filter((student) => classNames.includes(student.className)).length;
-  const emptyClasses = classNames.filter((className) => !students.value.some((student) => student.className === className));
+  const emptyClasses = receivingClasses.filter((className) => !students.value.some((student) => student.className === className));
   const emptyClassTip = emptyClasses.length
     ? `\n注意：${emptyClasses.join("、")} 当前学期尚无学生。`
     : "";
+  const ownTip = own ? `\n同时发布本人班级：${own.classNames.join('、')}；开始：${own.startTime?.replace('T', ' ') || '立即开放'}；截止：${own.endTime.replace('T', ' ')}。其他班级仍等待任课老师发布。` : '';
   await ElMessageBox.confirm(
     assignmentForm.teacherReleaseRequired
-      ? `确认向 ${classNames.join("、")} 下发总任务？学生须等待任课老师按班发布后才能查看。${emptyClassTip}`
+      ? `确认向全体任课老师发布总任务？${ownTip || '老师可以立即查看作业内容，学生须等待任课老师发布到本班后才能查看。'}${emptyClassTip}`
       : `确认发布到 ${classNames.join("、")}，当前覆盖 ${studentCount} 名学生？${emptyClassTip}`,
     assignmentForm.teacherReleaseRequired ? "确认下发总任务" : "确认发布班级",
     {

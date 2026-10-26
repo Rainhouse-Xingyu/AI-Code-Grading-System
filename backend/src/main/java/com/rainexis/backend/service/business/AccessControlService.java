@@ -15,7 +15,7 @@ import java.time.LocalDateTime;
 /**
  * 访问权限控制服务
  * 封装跨实体间的权限校验逻辑，确保用户只能操作自己有权访问的资源
- * - 教师只能管理自己创建的作业、本班学生
+ * - 教师可查看统一总任务，只能管理本人负责班级的作业、学生，不以发布人为权限依据
  * - 学生只能访问自己的提交、本班已发布的作业
  */
 @Service
@@ -40,7 +40,7 @@ public class AccessControlService {
         this.teacherClassService = teacherClassService;
     }
 
-    /** 校验当前用户是管理员且是作业发布管理者。普通教师不能创建、编辑、发布作业。 */
+    /** 总任务和原流程作业的创建、编辑、统一发布仅允许管理员；本班开放走独立接口。 */
     public TAssignment requireAssignmentOwner(Long assignmentId) {
         AuthContext.requireAdmin();
         TAssignment assignment = assignmentMapper.selectById(assignmentId);

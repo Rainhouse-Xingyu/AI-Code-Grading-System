@@ -105,17 +105,36 @@ public class AssignmentClassService {
     }
 
     public List<String> visibleClassNames(TAssignment assignment, AuthUser current) {
+        if (Boolean.TRUE.equals(assignment.getTeacherReleaseRequired()) && !current.isAdmin()) {
+            return managedClassNames(current);
+        }
         List<String> classes = classNames(assignment);
         if ("admin".equals(current.role())) {
             return classes;
         }
-        return teacherClassService.managedClasses(current).stream().filter(classes::contains).toList();
+        return managedClassNames(current).stream().filter(classes::contains).toList();
+    }
+
+    public List<String> managedClassNames(AuthUser current) {
+        return teacherClassService.managedClasses(current);
+    }
+
+    /** 管理员的全局查看权限，不等于以任课老师身份发布所有班级。 */
+    public List<String> ownClassNames(TAssignment assignment, AuthUser current) {
+        if (Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) return managedClassNames(current);
+        List<String> targets = classNames(assignment);
+        return managedClassNames(current).stream().filter(targets::contains).toList();
     }
 
     public boolean teacherCanAccess(TAssignment assignment, AuthUser current) {
         if (current.isAdmin()) return true;
-        if (assignment.getParentAssignmentId() != null && !current.id().equals(assignment.getTeacherId())) return false;
+        if (Boolean.TRUE.equals(assignment.getTeacherReleaseRequired())) return "published".equals(assignment.getStatus());
+        // teacherId 记录发布人；班级管理权限以当前负责班级为准，管理员代发不改变归属。
         return !visibleClassNames(assignment, current).isEmpty();
+    }
+
+    public List<String> allManagedClassNames() {
+        return teacherClassService.allManagedClasses();
     }
 
     public List<String> parseLegacyClassName(String value) {

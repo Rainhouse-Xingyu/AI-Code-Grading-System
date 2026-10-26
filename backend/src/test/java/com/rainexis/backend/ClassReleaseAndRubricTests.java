@@ -71,6 +71,103 @@ class ClassReleaseAndRubricTests {
         return json.readTree(response.getContentAsString()).path("data");
     }
 
+    Map<String, Object> masterPayload(boolean published) throws Exception {
+        JsonNode template = postJson("/api/v1/rubric-templates", admin, Map.of("templateName", "管理员兼任教师", "items", List.of(
+                Map.of("dimensionName", "知识点", "pointName", "变量", "pointScore", 100))));
+        return new LinkedHashMap<>(Map.of("title", UUID.randomUUID().toString(), "classNames", List.of(classA, classB),
+                "published", published, "teacherReleaseRequired", true, "rubricTemplateId", template.path("id").asLong(),
+                "selectedRubricItemIds", List.of(template.path("items").get(0).path("id").asLong())));
+    }
+
+    @Test void adminCanPublishSelectedOwnClassesAtomicallyWithTheMaster() throws Exception {
+        String classC = classA + "C";
+        admin = token("admin", "", classA + "、" + classC);
+        mvc.perform(get("/api/v1/assignments/my-classes").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0]").value(classA)).andExpect(jsonPath("$.data[1]").value(classC));
+        mvc.perform(get("/api/v1/assignments/my-classes").header("Authorization", studentA)).andExpect(status().isForbidden());
+        var payload = masterPayload(true);
+        payload.put("classNames", List.of(classA, classB, classC));
+        payload.put("ownClassRelease", Map.of("classNames", List.of(classA, classC), "endTime", LocalDateTime.now().plusDays(4).toString()));
+        JsonNode master = postJson("/api/v1/assignments", admin, payload);
+        long id = master.path("id").asLong();
+        var children = assignments.selectList(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id));
+        assertThat(children).hasSize(2);
+        assertThat(children).allSatisfy(child -> {
+            assertThat(child.getTeacherId()).isEqualTo(master.path("teacherId").asLong());
+            assertThat(child.getNormalizedRubricJson()).isEqualTo(master.path("normalizedRubricJson").asText());
+            assertThat(child.getTeacherReleaseRequired()).isFalse();
+        });
+        mvc.perform(get("/api/v1/assignments").header("Authorization", studentA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.parentAssignmentId == " + id + ")].className").value(classA))
+                .andExpect(jsonPath("$.data[?(@.id == " + id + ")]").isEmpty());
+        mvc.perform(get("/api/v1/assignments").header("Authorization", studentB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.parentAssignmentId == " + id + ")]").isEmpty());
+        mvc.perform(get("/api/v1/assignments/" + id + "/class-releases").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.className == '" + classB + "')].status").value("pending"));
+        mvc.perform(post("/api/v1/assignments/" + id + "/class-release").header("Authorization", admin)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("className", classA, "endTime", LocalDateTime.now().plusDays(5).toString()))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test void invalidOwnReleaseRollsBackMasterAndNeverPublishesOtherTeachersClasses() throws Exception {
+        admin = token("admin", "", classA);
+        for (var own : List.of(
+                Map.of("classNames", List.of(classA, classB), "endTime", LocalDateTime.now().plusDays(2).toString()),
+                Map.of("classNames", List.of(classA), "endTime", LocalDateTime.now().minusDays(1).toString()),
+                Map.of("classNames", List.of(classA), "startTime", LocalDateTime.now().plusDays(3).toString(), "endTime", LocalDateTime.now().plusDays(2).toString()))) {
+            var payload = masterPayload(true);
+            payload.put("ownClassRelease", own);
+            long before = assignments.selectCount(null);
+            mvc.perform(post("/api/v1/assignments").header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(payload)))
+                    .andExpect(status().is(own.get("classNames").equals(List.of(classA, classB)) ? 403 : 400));
+            assertThat(assignments.selectCount(null)).isEqualTo(before);
+        }
+        var payload = masterPayload(true);
+        JsonNode master = postJson("/api/v1/assignments", admin, payload); // 未勾选不会自动发布
+        long id = master.path("id").asLong();
+        assertThat(assignments.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id))).isZero();
+        mvc.perform(get("/api/v1/assignments").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + id + ")].releasableClassNames[0]").value(classA));
+        mvc.perform(post("/api/v1/assignments/" + id + "/class-release").header("Authorization", admin)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("className", classB, "endTime", LocalDateTime.now().plusDays(5).toString()))))
+                .andExpect(status().isForbidden());
+        postJson("/api/v1/assignments/" + id + "/class-release", admin, Map.of("className", classA, "endTime", LocalDateTime.now().plusDays(2).toString()));
+    }
+
+    @Test void savingDraftDoesNotReleaseButPublishingDraftDoesAndInvalidReleaseRollsBack() throws Exception {
+        admin = token("admin", "", classA);
+        var payload = masterPayload(false);
+        var own = Map.of("classNames", List.of(classA), "startTime", LocalDateTime.now().plusDays(1).toString(), "endTime", LocalDateTime.now().plusDays(3).toString());
+        payload.put("ownClassRelease", own);
+        long id = postJson("/api/v1/assignments", admin, payload).path("id").asLong();
+        assertThat(assignments.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id))).isZero();
+        payload.put("published", true);
+        payload.put("ownClassRelease", Map.of("classNames", List.of(classB), "endTime", LocalDateTime.now().plusDays(3).toString()));
+        mvc.perform(put("/api/v1/assignments/" + id).header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(payload)))
+                .andExpect(status().isForbidden());
+        assertThat(assignments.selectById(id).getStatus()).isEqualTo("draft");
+        payload.put("ownClassRelease", own);
+        mvc.perform(put("/api/v1/assignments/" + id).header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(payload)))
+                .andExpect(status().isOk());
+        assertThat(assignments.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id))).isEqualTo(1);
+        mvc.perform(get("/api/v1/assignments").header("Authorization", studentA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.parentAssignmentId == " + id + ")]").isEmpty());
+    }
+
+    @Test void patchPublishSupportsOwnClassesAndLegacyEmptyBody() throws Exception {
+        admin = token("admin", "", classA);
+        long id = postJson("/api/v1/assignments", admin, masterPayload(false)).path("id").asLong();
+        var own = Map.of("classNames", List.of(classA), "endTime", LocalDateTime.now().plusDays(2).toString());
+        mvc.perform(patch("/api/v1/assignments/" + id + "/publish").header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(own)))
+                .andExpect(status().isOk());
+        assertThat(assignments.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id))).isEqualTo(1);
+        mvc.perform(patch("/api/v1/assignments/" + id + "/publish").header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(own)))
+                .andExpect(status().isConflict());
+        long legacy = postJson("/api/v1/assignments", admin, masterPayload(false)).path("id").asLong();
+        mvc.perform(patch("/api/v1/assignments/" + legacy + "/publish").header("Authorization", admin)).andExpect(status().isOk());
+        assertThat(assignments.selectCount(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, legacy))).isZero();
+    }
+
     @Test void totalTaskNeedsIndependentTeacherReleasesAndEnforcesOwnershipAndSchedule() throws Exception {
         JsonNode template = postJson("/api/v1/rubric-templates", admin, Map.of("templateName", "统一标准", "items", List.of(
                 Map.of("dimensionName", "知识点", "pointName", "变量", "pointScore", 60),
@@ -108,10 +205,190 @@ class ClassReleaseAndRubricTests {
         mvc.perform(get("/api/v1/assignments").header("Authorization", studentB)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[?(@.id == " + childId + ")]").isEmpty());
         postJson("/api/v1/assignments/" + masterId + "/class-release", teacherB, Map.of("className", classB, "endTime", LocalDateTime.now().plusDays(6).toString()));
-        mvc.perform(get("/api/v1/assignments/" + masterId + "/class-releases").header("Authorization", admin)).andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(2));
+        mvc.perform(get("/api/v1/assignments/" + masterId + "/class-releases").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.className == '" + classA + "')].status").value("published"))
+                .andExpect(jsonPath("$.data[?(@.className == '" + classB + "')].status").value("published"));
         mvc.perform(delete("/api/v1/assignments/" + masterId).header("Authorization", admin)).andExpect(status().isConflict());
         String noClasses = token("teacher", "", "");
         mvc.perform(get("/api/v1/users/students").header("Authorization", noClasses)).andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(0));
+    }
+
+    @Test void childOnlyAllowsOwnClassScheduleChangesAndKeepsInheritedContentAndOtherClassesUntouched() throws Exception {
+        var payload = masterPayload(true);
+        payload.put("description", "统一作业要求");
+        payload.put("language", "java");
+        long masterId = postJson("/api/v1/assignments", admin, payload).path("id").asLong();
+        var release = new LinkedHashMap<String, Object>();
+        release.put("className", classA);
+        release.put("endTime", LocalDateTime.now().plusDays(3).withNano(0).toString());
+        // 附带自定义要求和评分字段也不能覆盖总任务快照。
+        release.put("description", "擅自更改题目");
+        release.put("normalizedRubricJson", "{}");
+        long childId = postJson("/api/v1/assignments/" + masterId + "/class-release", teacherA, release).path("id").asLong();
+        long otherId = postJson("/api/v1/assignments/" + masterId + "/class-release", teacherB,
+                Map.of("className", classB, "endTime", LocalDateTime.now().plusDays(5).withNano(0).toString())).path("id").asLong();
+        TAssignment masterBefore = assignments.selectById(masterId);
+        TAssignment childBefore = assignments.selectById(childId);
+        TAssignment otherBefore = assignments.selectById(otherId);
+        assertThat(childBefore.getDescription()).isEqualTo(masterBefore.getDescription());
+        assertThat(childBefore.getNormalizedRubricJson()).isEqualTo(masterBefore.getNormalizedRubricJson());
+
+        for (String actor : List.of(teacherA, admin)) {
+            mvc.perform(put("/api/v1/assignments/" + childId).header("Authorization", actor)
+                    .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("title", "更改子作业", "description", "另一套要求", "published", true))))
+                    .andExpect(status().isForbidden());
+        }
+        LocalDateTime start = LocalDateTime.now().plusDays(1).withNano(0);
+        LocalDateTime end = start.plusDays(7);
+        var schedule = new LinkedHashMap<String, Object>();
+        schedule.put("startTime", start.toString()); schedule.put("endTime", end.toString());
+        schedule.put("className", classB); schedule.put("title", "篡改标题");
+        schedule.put("description", "篡改要求"); schedule.put("normalizedRubricJson", "{}");
+        schedule.put("parentAssignmentId", otherId); schedule.put("latePolicy", "allow_mark");
+        for (String actor : List.of(teacherB, admin, studentA)) {
+            mvc.perform(put("/api/v1/assignments/" + childId + "/class-schedule").header("Authorization", actor)
+                    .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(schedule))).andExpect(status().isForbidden());
+        }
+        mvc.perform(put("/api/v1/assignments/" + childId + "/class-schedule").header("Authorization", teacherA)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(schedule))).andExpect(status().isOk());
+        TAssignment changed = assignments.selectById(childId);
+        assertThat(changed.getStartTime()).isEqualTo(start);
+        assertThat(changed.getEndTime()).isEqualTo(end);
+        assertThat(changed).usingRecursiveComparison().ignoringFields("startTime", "endTime").isEqualTo(childBefore);
+        assertThat(assignments.selectById(masterId)).usingRecursiveComparison().isEqualTo(masterBefore);
+        assertThat(assignments.selectById(otherId)).usingRecursiveComparison().isEqualTo(otherBefore);
+
+        // 管理员兼任本班老师时也可以调整时间，并可清除预约时间，改为立即开放。
+        String ownAdmin = token("admin", "", classA);
+        mvc.perform(put("/api/v1/assignments/" + childId + "/class-schedule").header("Authorization", ownAdmin)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("endTime", end.toString())))).andExpect(status().isOk());
+        assertThat(assignments.selectById(childId).getStartTime()).isNull();
+    }
+
+    @Test void masterIsVisibleToAllTeachersRegardlessOfAdminClassesAndDetailsAreReadOnly() throws Exception {
+        admin = token("admin", "", classA);
+        var payload = masterPayload(true);
+        payload.put("classNames", List.of(classA)); // 管理员只选了自己班级，也不能隐藏对其他老师的总任务。
+        payload.put("description", "完整作业要求\n源码与 AI 交互 JSON 一起提交");
+        payload.put("ownClassRelease", Map.of("classNames", List.of(classA), "endTime", LocalDateTime.now().plusDays(2).toString()));
+        JsonNode master = postJson("/api/v1/assignments", admin, payload);
+        long id = master.path("id").asLong();
+        mvc.perform(get("/api/v1/assignments").header("Authorization", teacherB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + id + ")].releasableClassNames[0]").value(classB))
+                .andExpect(jsonPath("$.data[?(@.parentAssignmentId == " + id + ")]").isEmpty());
+        mvc.perform(get("/api/v1/assignments/" + id).header("Authorization", teacherB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.description").value(payload.get("description")))
+                .andExpect(jsonPath("$.data.normalizedRubricJson").value(master.path("normalizedRubricJson").asText()));
+        mvc.perform(put("/api/v1/assignments/" + id).header("Authorization", teacherB).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(payload)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/assignments/" + id + "/class-releases").header("Authorization", teacherB)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/assignments/" + id + "/my-class-releases").header("Authorization", teacherB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1)).andExpect(jsonPath("$.data[0].className").value(classB))
+                .andExpect(jsonPath("$.data[0].status").value("pending"));
+        mvc.perform(get("/api/v1/assignments/" + id + "/class-releases").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.className == '" + classB + "')].status").value("pending"));
+        mvc.perform(get("/api/v1/assignments").header("Authorization", studentB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + id + ")]").isEmpty());
+        JsonNode child = postJson("/api/v1/assignments/" + id + "/class-release", teacherB,
+                Map.of("className", classB, "endTime", LocalDateTime.now().plusDays(3).toString()));
+        assertThat(child.path("normalizedRubricJson").asText()).isEqualTo(master.path("normalizedRubricJson").asText());
+        mvc.perform(get("/api/v1/assignments").header("Authorization", studentB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + child.path("id").asLong() + ")].className").value(classB));
+    }
+
+    @Test void globalMasterCanOmitTargetClassesAndUnassignedTeacherCanOnlyReadPublishedDetails() throws Exception {
+        String noClasses = token("teacher", "", "");
+        var payload = masterPayload(false);
+        payload.put("classNames", List.of());
+        long id = postJson("/api/v1/assignments", admin, payload).path("id").asLong();
+        mvc.perform(get("/api/v1/assignments/" + id).header("Authorization", noClasses)).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/v1/assignments/" + id + "/publish").header("Authorization", admin)).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/assignments/" + id).header("Authorization", noClasses)).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/assignments/" + id).header("Authorization", studentA)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/assignments/" + id + "/my-class-releases").header("Authorization", noClasses)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+        mvc.perform(post("/api/v1/assignments/" + id + "/class-release").header("Authorization", noClasses)
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("className", classA, "endTime", LocalDateTime.now().plusDays(1).toString()))))
+                .andExpect(status().isForbidden());
+        admin = token("admin", "", classA);
+        postJson("/api/v1/assignments/" + id + "/class-release", admin, Map.of("className", classA, "endTime", LocalDateTime.now().plusDays(2).toString()));
+        // 无班级的直接发布旧流程仍然不可用。
+        payload.put("teacherReleaseRequired", false);
+        payload.put("published", true);
+        mvc.perform(post("/api/v1/assignments").header("Authorization", admin).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(payload)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test void adminReleasedClassRemainsManageableByItsAssignedTeacherAcrossTheWorkflow() throws Exception {
+        admin = token("admin", "", classA);
+        var payload = masterPayload(true);
+        payload.put("ownClassRelease", Map.of("classNames", List.of(classA), "endTime", LocalDateTime.now().plusDays(3).toString()));
+        long masterId = postJson("/api/v1/assignments", admin, payload).path("id").asLong();
+        TAssignment child = assignments.selectOne(new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, masterId));
+        long childId = child.getId();
+        long publisherId = child.getTeacherId();
+        long teacherId = jwt.parse(teacherA.substring(7)).id();
+        assertThat(publisherId).isNotEqualTo(teacherId);
+        TSubmission submission = new TSubmission();
+        submission.setAssignmentId(childId); submission.setStudentId(jwt.parse(studentA.substring(7)).id());
+        submission.setFileUrl("class-permission-fixture.zip"); submission.setFileName("fixture.zip");
+        submission.setStatus("parsed"); submission.setCurrent(true); submission.setSubmissionVersion(1); submission.setUploadTime(LocalDateTime.now());
+        submissions.insert(submission);
+        long submissionId = submission.getId();
+
+        mvc.perform(get("/api/v1/assignments").header("Authorization", teacherA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + childId + ")].teacherId").value((int) publisherId));
+        mvc.perform(get("/api/v1/submissions").param("assignment_id", String.valueOf(childId)).header("Authorization", teacherA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].id").value((int) submissionId));
+        mvc.perform(get("/api/v1/assignments/" + childId + "/stats").header("Authorization", teacherA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.submitted").value(1));
+        mvc.perform(get("/api/v1/assignments").header("Authorization", teacherB)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + childId + ")]").isEmpty());
+        mvc.perform(get("/api/v1/submissions").param("assignment_id", String.valueOf(childId)).header("Authorization", teacherB)).andExpect(status().isForbidden());
+
+        var batch = Map.of("assignmentId", childId, "submissionIds", List.of(submissionId));
+        // 本班老师已通过评分权限校验，只有没有 ZIP 预处理的合成测试提交会被业务校验拒绝。
+        mvc.perform(post("/api/v1/ai-tasks/batch-score").header("Authorization", teacherA).header("X-CSRF-Token", jwt.parse(teacherA.substring(7)).csrfToken())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(batch))).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("提交尚未完成 ZIP 预处理"));
+        mvc.perform(post("/api/v1/ai-tasks/batch-score").header("Authorization", teacherB).header("X-CSRF-Token", jwt.parse(teacherB.substring(7)).csrfToken())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(batch))).andExpect(status().isForbidden());
+
+        postJson("/api/v1/ai-reports/" + submissionId + "/manual", teacherA, Map.of("totalScore", 80, "dimensionScores", List.of(Map.of("name", "知识点 - 变量", "score", 80, "max_score", 100))));
+        mvc.perform(get("/api/v1/ai-reports/" + submissionId).header("Authorization", teacherA)).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/ai-reports/" + submissionId).header("Authorization", teacherB)).andExpect(status().isForbidden());
+        mvc.perform(put("/api/v1/teacher-reviews/" + submissionId).header("Authorization", teacherA).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("finalScore", 81, "finalComment", "本班任课老师复核")))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.teacherId").value((int) teacherId));
+        mvc.perform(put("/api/v1/teacher-reviews/" + submissionId).header("Authorization", teacherB).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("finalScore", 0)))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/grade-publish/push").header("Authorization", teacherB).header("X-CSRF-Token", jwt.parse(teacherB.substring(7)).csrfToken())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("submissionIds", List.of(submissionId))))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/grade-publish/push").header("Authorization", teacherA).header("X-CSRF-Token", jwt.parse(teacherA.substring(7)).csrfToken())
+                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(Map.of("submissionIds", List.of(submissionId))))).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/grade-publish/my-grade/" + childId).header("Authorization", studentA)).andExpect(status().isOk());
+
+        var schedule = Map.of("endTime", LocalDateTime.now().plusDays(4).toString());
+        mvc.perform(put("/api/v1/assignments/" + childId + "/class-schedule").header("Authorization", teacherA).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(schedule)))
+                .andExpect(status().isOk());
+        mvc.perform(put("/api/v1/assignments/" + childId + "/class-schedule").header("Authorization", teacherB).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsBytes(schedule)))
+                .andExpect(status().isForbidden());
+        assertThat(assignments.selectById(childId).getTeacherId()).isEqualTo(publisherId);
+        mvc.perform(get("/api/v1/assignments/" + masterId + "/class-releases").header("Authorization", teacherA)).andExpect(status().isForbidden());
+    }
+
+    @Test void sameClassColleagueCanManageButOriginalPublisherLosesAccessAfterReassignment() throws Exception {
+        long masterId = postJson("/api/v1/assignments", admin, masterPayload(true)).path("id").asLong();
+        long childId = postJson("/api/v1/assignments/" + masterId + "/class-release", teacherA,
+                Map.of("className", classA, "endTime", LocalDateTime.now().plusDays(2).toString())).path("id").asLong();
+        String colleague = token("teacher", "", classA);
+        mvc.perform(get("/api/v1/assignments/" + childId).header("Authorization", colleague)).andExpect(status().isOk());
+        TUser original = users.selectById(jwt.parse(teacherA.substring(7)).id());
+        original.setTeachingClass(classB); users.updateById(original);
+        mvc.perform(get("/api/v1/assignments/" + childId).header("Authorization", teacherA)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/assignments").header("Authorization", teacherA)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + childId + ")]").isEmpty());
+        mvc.perform(get("/api/v1/assignments/" + childId).header("Authorization", colleague)).andExpect(status().isOk());
     }
 
     @Test void legacyBandsAreGroupedWithoutRewritingStoredRowsOrAddingScores() throws Exception {
