@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import com.rainexis.backend.config.DatabaseMigrationConfig;
 import com.rainexis.backend.entity.TAssignment;
 import com.rainexis.backend.entity.TAiReport;
@@ -447,6 +448,8 @@ class EndToEndWorkflowTests {
                     PdfReader reader = new PdfReader(pdf);
                     try {
                         assertThat(reader.getNumberOfPages()).isGreaterThan(0);
+                        String content = new PdfTextExtractor(reader).getTextFromPage(1);
+                        assertThat(content).contains("Alice", "评分报告", "最终得分");
                     } finally {
                         reader.close();
                     }

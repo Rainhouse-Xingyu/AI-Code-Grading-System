@@ -178,11 +178,13 @@ public class PdfExportService {
         candidates.add("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc,0");
         candidates.add("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc,0");
         candidates.add("/usr/share/fonts/truetype/arphic/uming.ttc,0");
+        // macOS 的 STHeiti TTC 在 OpenPDF 中可能生成无 ToUnicode 映射的空白文字。
+        // Arial Unicode 的独立 TTF 可稳定嵌入中英文字符，应先于系统 TTC 使用。
+        candidates.add("/Library/Fonts/Arial Unicode.ttf");
+        candidates.add("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
         candidates.add("/System/Library/Fonts/STHeiti Light.ttc,0");
         candidates.add("/System/Library/Fonts/STHeiti Medium.ttc,0");
         candidates.add("/System/Library/Fonts/Supplemental/Songti.ttc,0");
-        candidates.add("/Library/Fonts/Arial Unicode.ttf");
-        candidates.add("/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
         return candidates;
     }
 
