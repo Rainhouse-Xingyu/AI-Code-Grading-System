@@ -109,6 +109,41 @@ class ClassReleaseAndRubricTests {
                 .andExpect(status().isConflict());
     }
 
+    @Test void teacherCanPublishToMultipleOwnClassesInOneRequest() throws Exception {
+        String classC = classA + "C";
+        String classD = classA + "D";
+        String teacher = token("teacher", "", String.join("、", classA, classC, classD));
+        JsonNode master = postJson("/api/v1/assignments", admin, masterPayload(true));
+        long id = master.path("id").asLong();
+        String path = "/api/v1/assignments/" + id + "/class-releases";
+        String start = LocalDateTime.now().plusDays(1).withNano(0).toString();
+        String end = LocalDateTime.now().plusDays(3).withNano(0).toString();
+        var childrenOfMaster = new LambdaQueryWrapper<TAssignment>().eq(TAssignment::getParentAssignmentId, id);
+
+        mvc.perform(post(path).header("Authorization", teacher).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("classNames", List.of(classA, classB), "endTime", end))))
+                .andExpect(status().isForbidden());
+        assertThat(assignments.selectCount(childrenOfMaster)).isZero();
+
+        JsonNode released = postJson(path, teacher, Map.of("classNames", List.of(classA, classC), "startTime", start, "endTime", end));
+        assertThat(released).hasSize(2);
+        assertThat(released.get(0).path("id").asLong()).isNotEqualTo(released.get(1).path("id").asLong());
+        assertThat(assignments.selectList(childrenOfMaster))
+                .allSatisfy(child -> {
+                    assertThat(child.getStartTime()).isEqualTo(LocalDateTime.parse(start));
+                    assertThat(child.getEndTime()).isEqualTo(LocalDateTime.parse(end));
+                    assertThat(child.getNormalizedRubricJson()).isEqualTo(master.path("normalizedRubricJson").asText());
+                })
+                .extracting(TAssignment::getClassName).containsExactlyInAnyOrder(classA, classC);
+
+        mvc.perform(post(path).header("Authorization", teacher).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsBytes(Map.of("classNames", List.of(classD, classA), "endTime", end))))
+                .andExpect(status().isConflict());
+        assertThat(assignments.selectCount(childrenOfMaster)).isEqualTo(2);
+        mvc.perform(get("/api/v1/assignments").header("Authorization", teacher)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id == " + id + ")].releasableClassNames[0]").value(classD));
+    }
+
     @Test void invalidOwnReleaseRollsBackMasterAndNeverPublishesOtherTeachersClasses() throws Exception {
         admin = token("admin", "", classA);
         for (var own : List.of(

@@ -634,29 +634,44 @@ public class AssignmentApiController {
         if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired())) {
             throw BusinessException.badRequest("只有总任务支持同时发布本人负责班级");
         }
+        createClassAssignments(master, request);
+    }
+
+    private List<TAssignment> createClassAssignments(TAssignment master, OwnClassReleaseRequest request) {
         List<String> selected = assignmentClassService.normalize(request.classNames());
         if (selected.isEmpty()) throw BusinessException.badRequest("请选择本人负责班级");
         List<String> allowed = assignmentClassService.ownClassNames(master, AuthContext.get());
-        if (!allowed.containsAll(selected)) throw BusinessException.forbidden("只能同时发布本人负责的班级");
+        if (!allowed.containsAll(selected)) throw BusinessException.forbidden("只能发布自己负责的班级");
         validateSchedule(request.startTime(), request.endTime());
-        for (String className : selected) {
-            createClassAssignment(master, new ClassReleaseRequest(className, request.startTime(), request.endTime()));
-        }
+        return selected.stream()
+                .map(className -> createClassAssignment(master, new ClassReleaseRequest(className, request.startTime(), request.endTime())))
+                .toList();
     }
 
     @PostMapping("/{id}/class-release")
     @Transactional
     public ApiResponse<TAssignment> releaseClass(@PathVariable Long id, @RequestBody ClassReleaseRequest request) {
-        TAssignment master = accessControlService.requireAssignmentAccess(id);
-        semesterService.requireActive(master.getSemesterId());
-        if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired()) || master.getParentAssignmentId() != null || !"published".equals(master.getStatus())) {
-            throw BusinessException.badRequest("只能从已下发的总任务发布班级作业");
-        }
+        TAssignment master = requirePublishedMaster(id);
         if (request == null || !assignmentClassService.ownClassNames(master, AuthContext.get()).contains(request.className())) {
             throw BusinessException.forbidden("只能发布自己负责的班级");
         }
         validateSchedule(request.startTime(), request.endTime());
         return ApiResponse.ok(createClassAssignment(master, request));
+    }
+
+    @PostMapping("/{id}/class-releases")
+    @Transactional
+    public ApiResponse<List<TAssignment>> releaseClasses(@PathVariable Long id, @RequestBody OwnClassReleaseRequest request) {
+        return ApiResponse.ok(createClassAssignments(requirePublishedMaster(id), request));
+    }
+
+    private TAssignment requirePublishedMaster(Long id) {
+        TAssignment master = accessControlService.requireAssignmentAccess(id);
+        semesterService.requireActive(master.getSemesterId());
+        if (!Boolean.TRUE.equals(master.getTeacherReleaseRequired()) || master.getParentAssignmentId() != null || !"published".equals(master.getStatus())) {
+            throw BusinessException.badRequest("只能从已下发的总任务发布班级作业");
+        }
+        return master;
     }
 
     private TAssignment createClassAssignment(TAssignment master, ClassReleaseRequest request) {

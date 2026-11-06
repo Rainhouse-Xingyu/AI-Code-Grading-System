@@ -1134,12 +1134,15 @@
       </div>
     </el-dialog>
     <el-dialog v-model="classReleaseVisible" :title="classReleaseTarget?.parentAssignmentId ? '调整本班作业时间' : '根据总任务发布本班作业'" width="560px">
-      <el-alert title="子作业沿用总任务的内容和评分标准，只能调整本班发布时间、截止时间。本班提交与成绩独立管理。" type="info" :closable="false" />
+      <el-alert :title="classReleaseTarget?.parentAssignmentId
+        ? '子作业沿用总任务的内容和评分标准，只能调整本班发布时间、截止时间。'
+        : '所选班级使用同一组发布时间和截止时间，各班分别生成子作业，独立管理提交与成绩。'" type="info" :closable="false" />
       <el-form label-position="top">
         <el-form-item label="总任务"><span>{{ classReleaseTarget?.title }}</span></el-form-item>
         <el-form-item label="负责班级">
-          <el-select v-model="classReleaseForm.className" :disabled="Boolean(classReleaseTarget?.parentAssignmentId)">
-            <el-option v-for="name in classReleaseTarget?.parentAssignmentId ? assignmentClassNames(classReleaseTarget) : classReleaseTarget?.releasableClassNames || []" :key="name" :label="name" :value="name" />
+          <span v-if="classReleaseTarget?.parentAssignmentId">{{ assignmentClassNames(classReleaseTarget).join('、') }}</span>
+          <el-select v-else v-model="classReleaseForm.classNames" multiple placeholder="选择要发布的班级">
+            <el-option v-for="name in classReleaseTarget?.releasableClassNames || []" :key="name" :label="name" :value="name" />
           </el-select>
         </el-form-item>
         <el-form-item label="发布时间（不填则立即开放）"><el-date-picker v-model="classReleaseForm.startTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" clearable /></el-form-item>
@@ -1305,7 +1308,7 @@ const operationalAssignments = computed(() => assignments.value.filter(item => !
 const classReleaseVisible = ref(false);
 const classReleaseSaving = ref(false);
 const classReleaseTarget = ref(null);
-const classReleaseForm = reactive({ className: '', startTime: '', endTime: '' });
+const classReleaseForm = reactive({ classNames: [], startTime: '', endTime: '' });
 const classProgressVisible = ref(false);
 const classReleaseRows = ref([]);
 const assignmentDetailVisible = ref(false);
@@ -1926,28 +1929,33 @@ async function saveAssignment() {
 
 function openClassRelease(row) {
   classReleaseTarget.value = row;
-  classReleaseForm.className = row.parentAssignmentId ? assignmentClassNames(row)[0] : row.releasableClassNames?.[0] || '';
+  const options = row.releasableClassNames || [];
+  classReleaseForm.classNames = options.length === 1 ? [...options] : [];
   classReleaseForm.startTime = row.parentAssignmentId ? row.startTime || '' : '';
   classReleaseForm.endTime = row.parentAssignmentId ? row.endTime || '' : '';
   classReleaseVisible.value = true;
 }
 
 async function saveClassRelease() {
-  if (!classReleaseForm.className || !classReleaseForm.endTime) {
-    ElMessage.warning('请选择负责班级和截止时间');
+  const target = classReleaseTarget.value;
+  if (!target.parentAssignmentId && !classReleaseForm.classNames.length) {
+    ElMessage.warning('请选择要发布的班级');
+    return;
+  }
+  if (!classReleaseForm.endTime) {
+    ElMessage.warning('请选择截止时间');
     return;
   }
   classReleaseSaving.value = true;
   try {
-    const target = classReleaseTarget.value;
-    const payload = { ...classReleaseForm, startTime: classReleaseForm.startTime || null };
+    const schedule = { startTime: classReleaseForm.startTime || null, endTime: classReleaseForm.endTime };
     const saved = target.parentAssignmentId
-      ? await props.api.put(`/api/v1/assignments/${target.id}/class-schedule`, payload)
-      : await props.api.post(`/api/v1/assignments/${target.id}/class-release`, payload);
+      ? [await props.api.put(`/api/v1/assignments/${target.id}/class-schedule`, schedule)]
+      : await props.api.post(`/api/v1/assignments/${target.id}/class-releases`, { ...schedule, classNames: classReleaseForm.classNames });
     classReleaseVisible.value = false;
     await refreshAll();
-    selectedAssignment.value = saved.id;
-    ElMessage.success(target.parentAssignmentId ? '本班作业时间已更新' : '本班作业已发布');
+    selectedAssignment.value = saved[0].id;
+    ElMessage.success(target.parentAssignmentId ? '本班作业时间已更新' : `已向 ${saved.length} 个班级发布作业`);
   } catch (error) { ElMessage.error(messageOf(error)); }
   finally { classReleaseSaving.value = false; }
 }
